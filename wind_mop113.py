@@ -2,44 +2,67 @@
 wind_mop113.py
 ==============
 
-Pure-Python wind-load calculation engine implementing ASCE MOP 113 (2007),
-*Substation Structure Design Guide*, governing equation Eq. 3-1:
+Pure-Python wind-load engine implementing ASCE MOP 113 (2007), *Substation
+Structure Design Guide*, governing equation Eq. 3-1 -- **SI-native form** --
+for a *stacked* substation assembly (main equipment seated on a steel lattice
+support seated on a foundation; an optional pedestal/plinth may also be stacked).
 
-        F = Q * Kz * V**2 * IFW * GRF * Cf * A
+UNIT POLICY (the single most important consistency rule)
+--------------------------------------------------------
+Everything in the force math is computed natively in SI.  We never round-trip
+through US units.
 
-It is implemented as a two-stage calculation exactly as the worked examples do:
+    Q   = 0.613                       (SI value printed in MOP 113 Eq. 3-1)
+    V   : input kph -> m/s  (V_ms = V_kph / 3.6)
+    L   : input mm  -> m
+    A   : m^2,  pressure : kPa,  force : kN,  line load : kN/m,  moment : kN.m
 
-    Stage 1 -- velocity pressure (force per unit area):
-        qz = Q * Kz * V**2 * IFW            [lb/ft^2]   -> converted to kPa
-    Stage 2 -- wind force on each element:
-        F  = qz * GRF * Cf * A              [lb]        -> converted to kN
+Feet are used ONLY to read the height-tabulated tables (3-1, 3-4a, 3-4b):
+``ft = m * 3.28084``.  The force equation itself stays entirely in SI.
 
-Q, Kz and V are US-customary based (Q = 0.00256 lb/ft^2/mph^2, V in mph,
-area in ft^2). All arithmetic is therefore done in US units and only the
-*results* are converted to SI (kPa, kN) for display.
+    MOP 113 prints Q = 0.00256 (US) and Q = 0.613 (SI).  These are not exact
+    twins, so SI-native results differ from US-unit hand calcs by ~0.1 %
+    (negligible).  This tool uses the SI form throughout.
 
-This module is intentionally free of any Flask / Plotly imports so that it
-stays trivially unit-testable.  ``calculate(inputs: dict) -> dict`` returns
-every intermediate value, ready-to-render LaTeX strings for each report step,
-and the raw data arrays the front end needs to build the Plotly figures.
+Governing equation (SI), built as a three-stage chain so the user can read off
+pressure, line load and force:
+
+    1. velocity pressure   qz = Q * Kz * V_ms^2 * IFW        [Pa -> kPa]
+    2. design pressure      p = qz * GRF * Cf                [kPa = kN/m^2]  (= F/A)
+    3. line load            w = p * b                        [kN/m]  (b = projected width)
+    4. element force        F = p * A = w * L                [kN]
+
+The module is free of any Flask / Plotly imports so it stays trivially
+unit-testable.  ``calculate(inputs) -> dict`` returns every intermediate, the
+LaTeX strings (numbers already substituted) and the raw Plotly data arrays.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 
 # ---------------------------------------------------------------------------
-# UNIT CONVERSION FACTORS  (exact factors required by the spec)
+# CONSTANTS & UNIT CONVERSIONS
 # ---------------------------------------------------------------------------
-KPH_TO_MPH = 0.621371          # mph = kph * 0.621371
-MM_TO_M = 1.0 / 1000.0         # m  = mm / 1000
-M_TO_FT = 3.28084              # ft = m * 3.28084
-M2_TO_FT2 = 10.76391           # ft^2 = m^2 * 10.76391
-PSF_TO_KPA = 0.04788026        # kPa = (lb/ft^2) * 0.04788026
-LB_TO_KN = 0.00444822          # kN  = lb * 0.00444822
-KG_TO_KN = 9.80665 / 1000.0    # weight: kN = kg * g / 1000  (display only)
+Q_SI = 0.613                # lb-equivalent SI air-density factor, Eq. 3-1 (SI)
+Q_US = 0.00256              # US value, shown only in the dual-constant note
+
+KPH_TO_MS = 1.0 / 3.6       # V_ms = V_kph / 3.6
+KPH_TO_MPH = 0.621371       # secondary US display only
+MM_TO_M = 1.0 / 1000.0
+M_TO_FT = 3.28084           # table lookups only
+PA_TO_KPA = 1.0 / 1000.0
+N_TO_KN = 1.0 / 1000.0
+PSF_PER_KPA = 1.0 / 0.04788026   # secondary US display only
+KG_TO_KN = 9.80665 / 1000.0
+
+DUAL_CONSTANT_NOTE = (
+    "MOP 113 prints Q = 0.00256 (US) and Q = 0.613 (SI). These are not exact "
+    "twins, so SI-native results differ from US-unit hand calcs by ~0.1% "
+    "(negligible). This tool uses the SI form throughout."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +70,8 @@ KG_TO_KN = 9.80665 / 1000.0    # weight: kN = kg * g / 1000  (display only)
 # ---------------------------------------------------------------------------
 
 # Table 3-1 -- Terrain Exposure Coefficient, Kz (height z in feet).
-# Linear-interpolate between rows; the "0-15" row is keyed at 15 ft.
+# The "0-15" row is keyed at 15 ft; linear-interpolate between rows.
 TABLE_3_1 = {
-    # z_ft : (Exp B, Exp C, Exp D)
     15:  {"B": 0.57, "C": 0.85, "D": 1.03},
     30:  {"B": 0.70, "C": 0.98, "D": 1.16},
     40:  {"B": 0.76, "C": 1.04, "D": 1.22},
@@ -62,9 +84,8 @@ TABLE_3_1 = {
 }
 TABLE_3_1_HEIGHTS = sorted(TABLE_3_1.keys())
 
-# Table 3-2 -- Power Law Constants (for Eq. 3-2 fallback, h > 100 ft).
+# Table 3-2 -- Power Law Constants (Eq. 3-2 fallback, h > 100 ft).
 TABLE_3_2 = {
-    # exposure : (alpha, zg_ft)
     "B": {"alpha": 7.0,  "zg": 1200.0},
     "C": {"alpha": 9.5,  "zg": 900.0},
     "D": {"alpha": 11.5, "zg": 700.0},
@@ -77,53 +98,72 @@ TABLE_3_3 = {
 }
 
 # Table 3-4a -- Structure GRF, wire-supporting, epsilon = 0.75 (tip height ft).
-# Each row is (upper_bound_ft, {B, C, D}); the band is "<= upper_bound".
 TABLE_3_4A = [
-    (33,  {"B": 1.17, "C": 0.96, "D": 0.85}),   # <= 33
-    (40,  {"B": 1.15, "C": 0.95, "D": 0.84}),   # > 33 to 40
-    (50,  {"B": 1.12, "C": 0.94, "D": 0.84}),   # > 40 to 50
-    (60,  {"B": 1.08, "C": 0.92, "D": 0.83}),   # > 50 to 60
-    (70,  {"B": 1.06, "C": 0.91, "D": 0.82}),   # > 60 to 70
-    (80,  {"B": 1.03, "C": 0.89, "D": 0.81}),   # > 70 to 80
-    (90,  {"B": 1.01, "C": 0.88, "D": 0.81}),   # > 80 to 90
-    (100, {"B": 1.00, "C": 0.88, "D": 0.80}),   # > 90 to 100
+    (33,  {"B": 1.17, "C": 0.96, "D": 0.85}),
+    (40,  {"B": 1.15, "C": 0.95, "D": 0.84}),
+    (50,  {"B": 1.12, "C": 0.94, "D": 0.84}),
+    (60,  {"B": 1.08, "C": 0.92, "D": 0.83}),
+    (70,  {"B": 1.06, "C": 0.91, "D": 0.82}),
+    (80,  {"B": 1.03, "C": 0.89, "D": 0.81}),
+    (90,  {"B": 1.01, "C": 0.88, "D": 0.81}),
+    (100, {"B": 1.00, "C": 0.88, "D": 0.80}),
 ]
 
 # Table 3-4b -- Structure GRF, flexible non-wire-supporting (<1 Hz), eps = 1.0.
 TABLE_3_4B = [
-    (15,  {"B": 1.59, "C": 1.20, "D": 1.02}),   # <= 15
-    (33,  {"B": 1.48, "C": 1.15, "D": 0.99}),   # > 15 to 33
-    (40,  {"B": 1.37, "C": 1.11, "D": 0.96}),   # > 33 to 40
-    (50,  {"B": 1.33, "C": 1.08, "D": 0.95}),   # > 40 to 50
-    (60,  {"B": 1.28, "C": 1.06, "D": 0.94}),   # > 50 to 60
-    (70,  {"B": 1.25, "C": 1.05, "D": 0.93}),   # > 60 to 70
-    (80,  {"B": 1.22, "C": 1.03, "D": 0.92}),   # > 70 to 80
-    (90,  {"B": 1.19, "C": 1.02, "D": 0.91}),   # > 80 to 90
-    (100, {"B": 1.17, "C": 1.00, "D": 0.90}),   # > 90 to 100
+    (15,  {"B": 1.59, "C": 1.20, "D": 1.02}),
+    (33,  {"B": 1.48, "C": 1.15, "D": 0.99}),
+    (40,  {"B": 1.37, "C": 1.11, "D": 0.96}),
+    (50,  {"B": 1.33, "C": 1.08, "D": 0.95}),
+    (60,  {"B": 1.28, "C": 1.06, "D": 0.94}),
+    (70,  {"B": 1.25, "C": 1.05, "D": 0.93}),
+    (80,  {"B": 1.22, "C": 1.03, "D": 0.92}),
+    (90,  {"B": 1.19, "C": 1.02, "D": 0.91}),
+    (100, {"B": 1.17, "C": 1.00, "D": 0.90}),
+]
+
+# Table 3-7 -- Aspect Ratio Correction Factor, c (for member-by-member trusses).
+# Bands keyed by upper bound of aspect ratio L/width.
+TABLE_3_7 = [
+    (4,   0.6),    # 0-4
+    (8,   0.7),    # 4-8
+    (40,  0.8),    # 8-40
+    (1e9, 1.0),    # >40
+]
+
+# Table 3-8 -- Cf, latticed structures, flat-sided members (function of solidity Phi).
+# Stored as descriptive bands; values computed in truss_cf_solidity().
+TABLE_3_8_ROWS = [
+    {"phi": "< 0.025",   "square": "4.00",        "tri": "3.6"},
+    {"phi": "0.025-0.44", "square": "4.1 - 5.2Φ", "tri": "3.7 - 4.5Φ"},
+    {"phi": "0.45-0.69", "square": "1.8",         "tri": "1.7"},
+    {"phi": "0.70-1.00", "square": "1.3 - 0.7Φ",  "tri": "1.0 + Φ"},
 ]
 
 # Table 3-9 -- Force Coefficient, Cf (structural shapes / bus / tubular).
 TABLE_3_9 = [
-    {"shape": "Structural shapes (average value)",      "cf": 1.6},
-    {"shape": "Bus: rigid and flexible",                "cf": 1.0},
-    {"shape": "Circular",                               "cf": 0.9},
-    {"shape": "Hexadecagonal (16-sided polygonal)",     "cf": 0.9},
-    {"shape": "Dodecagonal (12-sided polygonal)",       "cf": 1.0},
-    {"shape": "Octagonal (8-sided polygonal)",          "cf": 1.4},
-    {"shape": "Hexagonal (6-sided polygonal)",          "cf": 1.4},
-    {"shape": "Square or rectangle",                    "cf": 2.0},
+    {"shape": "Structural shapes (average value)",  "cf": 1.6},
+    {"shape": "Bus: rigid and flexible",            "cf": 1.0},
+    {"shape": "Circular",                           "cf": 0.9},
+    {"shape": "Hexadecagonal (16-sided polygonal)", "cf": 0.9},
+    {"shape": "Dodecagonal (12-sided polygonal)",   "cf": 1.0},
+    {"shape": "Octagonal (8-sided polygonal)",      "cf": 1.4},
+    {"shape": "Hexagonal (6-sided polygonal)",      "cf": 1.4},
+    {"shape": "Square or rectangle",                "cf": 2.0},
 ]
 
-# The fixed air-density factor from Eq. 3-1 (US units).
-Q_CONST = 0.00256  # lb/ft^2/mph^2
+# Table 3-10 -- Correction factor Cc, latticed round-section members (function of Phi).
+TABLE_3_10_ROWS = [
+    {"phi": "< 0.30",    "cc": "0.67"},
+    {"phi": "0.30-0.79", "cc": "0.47 + 0.67Φ"},
+    {"phi": "0.80-1.00", "cc": "1.0"},
+]
 
 
 # ---------------------------------------------------------------------------
-# Number formatting helpers for LaTeX strings
+# Formatting helper for LaTeX strings
 # ---------------------------------------------------------------------------
 def _f(x: float, n: int = 3) -> str:
-    """Format a float with n significant decimals, trimming trailing zeros only
-    when it keeps the report readable.  Used inside LaTeX strings."""
     return f"{x:,.{n}f}"
 
 
@@ -131,593 +171,633 @@ def _f(x: float, n: int = 3) -> str:
 # Kz -- Table 3-1 interpolation / Eq. 3-2 fallback
 # ---------------------------------------------------------------------------
 def compute_kz(h_ft: float, exposure: str) -> Dict[str, Any]:
-    """
-    Terrain exposure coefficient Kz for tip height ``h_ft`` (feet) in the
-    selected exposure column of Table 3-1.
+    """Terrain exposure coefficient Kz at effective height ``h_ft`` (feet).
 
-    * h <= 15 ft        -> use the 0-15 row value directly.
-    * 15 < h <= 100 ft  -> linear interpolation between bracketing rows.
-    * h > 100 ft        -> Eq. 3-2: Kz = 2.01 * (z / zg)^(2/alpha).
-
-    Returns a dict carrying the method, the result, and (for interpolation)
-    the two bracketing rows so the report can show the audit trail.
+    * h <= 15 ft       -> 0-15 row value directly.
+    * 15 < h <= 100 ft -> linear interpolation between bracketing rows.
+    * h > 100 ft       -> Eq. 3-2 power law, Kz = 2.01 (z/zg)^(2/alpha).
     """
     exposure = exposure.upper()
-
-    # --- Case 1: at or below 15 ft -> use the 0-15 row directly. ---
     if h_ft <= 15:
         kz = TABLE_3_1[15][exposure]
-        return {
-            "method": "floor",
-            "kz": kz,
-            "h_lo": 15, "h_hi": 15,
-            "kz_lo": kz, "kz_hi": kz,
-        }
-
-    # --- Case 3: above 100 ft -> Eq. 3-2 power-law fallback. ---
+        return {"method": "floor", "kz": kz, "h_lo": 15, "h_hi": 15,
+                "kz_lo": kz, "kz_hi": kz}
     if h_ft > 100:
         alpha = TABLE_3_2[exposure]["alpha"]
         zg = TABLE_3_2[exposure]["zg"]
         kz = 2.01 * (h_ft / zg) ** (2.0 / alpha)
-        return {
-            "method": "powerlaw",
-            "kz": kz,
-            "alpha": alpha,
-            "zg": zg,
-        }
-
-    # --- Case 2: 15 < h <= 100 -> linear interpolation. ---
+        return {"method": "powerlaw", "kz": kz, "alpha": alpha, "zg": zg}
     h_lo = max(z for z in TABLE_3_1_HEIGHTS if z <= h_ft)
     h_hi = min(z for z in TABLE_3_1_HEIGHTS if z >= h_ft)
-
     kz_lo = TABLE_3_1[h_lo][exposure]
     kz_hi = TABLE_3_1[h_hi][exposure]
-
-    if h_hi == h_lo:
-        kz = kz_lo
-    else:
-        kz = kz_lo + (h_ft - h_lo) / (h_hi - h_lo) * (kz_hi - kz_lo)
-
-    return {
-        "method": "interp",
-        "kz": kz,
-        "h_lo": h_lo, "h_hi": h_hi,
-        "kz_lo": kz_lo, "kz_hi": kz_hi,
-    }
+    kz = kz_lo if h_hi == h_lo else \
+        kz_lo + (h_ft - h_lo) / (h_hi - h_lo) * (kz_hi - kz_lo)
+    return {"method": "interp", "kz": kz, "h_lo": h_lo, "h_hi": h_hi,
+            "kz_lo": kz_lo, "kz_hi": kz_hi}
 
 
 # ---------------------------------------------------------------------------
-# GRF -- gust response factor lookup
+# GRF -- gust response factor lookup (Sec. 3.1.5.5)
 # ---------------------------------------------------------------------------
 def _band_lookup(table: List, h_ft: float, exposure: str) -> Dict[str, Any]:
-    """Return the GRF value and the band label for a banded table (3-4a/3-4b)."""
     exposure = exposure.upper()
-    prev_bound = 0
+    prev = 0
     for upper, row in table:
         if h_ft <= upper:
-            if prev_bound == 0:
-                band = f"≤{upper} ft"
-            else:
-                band = f">{prev_bound} to {upper} ft"
-            return {"grf": row[exposure], "band": band, "upper": upper}
-        prev_bound = upper
-    # Above the last band -> clamp to the top band (>90 to 100).
+            band = f"≤{upper} ft" if prev == 0 else f">{prev} to {upper} ft"
+            return {"grf": row[exposure], "band": band}
+        prev = upper
     upper, row = table[-1]
-    return {"grf": row[exposure], "band": f">{prev_bound} ft (clamped to top band)",
-            "upper": upper}
+    return {"grf": row[exposure], "band": f">{prev} ft (clamped to top band)"}
 
 
 def compute_grf(grf_type: str, h_ft: float, exposure: str) -> Dict[str, Any]:
-    """
-    Gust response factor per MOP 113 Sec. 3.1.5.5.
-
-    * "rigid"    -> 0.85 flat (Sec. 3.1.5.5.1, rigid non-wire-supporting >= 1 Hz).
-    * "wire"     -> Table 3-4a lookup by tip height + exposure (eps = 0.75).
-    * "flexible" -> Table 3-4b lookup by tip height + exposure (eps = 1.0).
-    """
+    """GRF per Sec. 3.1.5.5: rigid flat 0.85, else Table 3-4a/3-4b lookup."""
     if grf_type == "rigid":
         return {"grf": 0.85, "method": "rigid",
                 "desc": "Rigid, non-wire-supporting (≥1 Hz), Sec. 3.1.5.5.1"}
     if grf_type == "wire":
-        res = _band_lookup(TABLE_3_4A, h_ft, exposure)
-        res.update({"method": "table34a",
-                    "desc": "Wire-supporting, Table 3-4a (ε = 0.75)"})
-        return res
+        r = _band_lookup(TABLE_3_4A, h_ft, exposure)
+        r.update({"method": "table34a", "desc": "Wire-supporting, Table 3-4a (ε = 0.75)"})
+        return r
     if grf_type == "flexible":
-        res = _band_lookup(TABLE_3_4B, h_ft, exposure)
-        res.update({"method": "table34b",
-                    "desc": "Flexible non-wire-supporting, Table 3-4b (ε = 1.0)"})
-        return res
+        r = _band_lookup(TABLE_3_4B, h_ft, exposure)
+        r.update({"method": "table34b",
+                  "desc": "Flexible non-wire-supporting, Table 3-4b (ε = 1.0)"})
+        return r
     raise ValueError(f"Unknown grf_type: {grf_type!r}")
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Truss helpers
 # ---------------------------------------------------------------------------
-def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
+def aspect_ratio_c(ar: float) -> Dict[str, Any]:
+    """Table 3-7 aspect-ratio correction factor c for member-by-member trusses."""
+    for upper, c in TABLE_3_7:
+        if ar <= upper:
+            return {"c": c, "upper": upper}
+    return {"c": 1.0, "upper": 1e9}
+
+
+def cc_round(phi: float) -> float:
+    """Table 3-10 correction factor Cc for round latticed members."""
+    if phi < 0.30:
+        return 0.67
+    if phi <= 0.79:
+        return 0.47 + 0.67 * phi
+    return 1.0
+
+
+def truss_cf_solidity(phi: float, cross_section: str,
+                      member_type: str) -> Dict[str, Any]:
+    """Table 3-8 Cf for a complete latticed face as a function of solidity Phi.
+
+    Round members multiply the flat-sided Cf by Cc (Table 3-10).  The tabulated
+    Cf already accounts for BOTH windward and leeward faces incl. shielding
+    (Sec. 3.1.5.7), so the applied area is the solid area of ONE face.
     """
-    Run the full MOP 113 Eq. 3-1 wind-load calculation.
-
-    ``inputs`` keys (all numeric inputs already in the UI's display units):
-        tag             : str   equipment tag / name
-        V_kph           : float basic 3-s gust wind speed (kph)
-        shape           : str   "circular" | "rectangular"
-        H_mm            : float overall tip height above NGL (mm)
-        D_mm            : float body diameter (circular)            (mm)
-        WX_mm, WY_mm    : float projected widths front/side (rect)  (mm)
-        weight_kg       : float equipment weight (display only)     (kg)
-        include_plinth  : bool  include plinth in totals
-        plinth_height_mm: float plinth height (mm)
-        plinth_width_mm : float plinth square cross-section width (mm)
-        IFW             : float importance factor (Table 3-3)
-        exposure        : str   "B" | "C" | "D" (Table 3-1/3-2)
-        grf_type        : str   "rigid" | "wire" | "flexible"
-        cf_body         : float force coefficient, body  (Table 3-9)
-        cf_plinth       : float force coefficient, plinth (Table 3-9)
-        apply_075       : bool  apply 0.75 wind-on-two-faces factor to resultant
-
-    Returns a dict with: echoed inputs, every intermediate, ``steps`` (LaTeX),
-    ``summary``, and ``figures`` (raw data for Plotly).
-    """
-    # -- Parse / coerce inputs --------------------------------------------
-    tag = str(inputs.get("tag", "Equipment"))
-    V_kph = float(inputs["V_kph"])
-    shape = str(inputs.get("shape", "circular")).lower()
-    H_mm = float(inputs["H_mm"])
-    weight_kg = float(inputs.get("weight_kg", 0.0) or 0.0)
-    include_plinth = bool(inputs.get("include_plinth", True))
-    plinth_height_mm = float(inputs.get("plinth_height_mm", 0.0) or 0.0)
-    plinth_width_mm = float(inputs.get("plinth_width_mm", 0.0) or 0.0)
-    IFW = float(inputs["IFW"])
-    exposure = str(inputs.get("exposure", "C")).upper()
-    grf_type = str(inputs.get("grf_type", "rigid")).lower()
-    cf_body = float(inputs["cf_body"])
-    cf_plinth = float(inputs["cf_plinth"])
-    apply_075 = bool(inputs.get("apply_075", False))
-    Q = Q_CONST
-
-    # =====================================================================
-    # STEP 1 -- wind parameters
-    # =====================================================================
-    V_mph = V_kph * KPH_TO_MPH
-
-    # =====================================================================
-    # STEP 2 -- dimensions
-    # =====================================================================
-    H_m = H_mm * MM_TO_M
-    H_ft = H_m * M_TO_FT
-    weight_kN = weight_kg * KG_TO_KN
-
-    if shape == "circular":
-        D_mm = float(inputs["D_mm"])
-        D_m = D_mm * MM_TO_M
-        WX_m = WY_m = D_m            # projected width identical both directions
-        width_label_x = width_label_y = f"D = {_f(D_mm, 1)} mm"
+    square = (cross_section == "square")
+    if phi < 0.025:
+        cf_flat = 4.00 if square else 3.6
+        branch = "Φ < 0.025"
+    elif phi <= 0.44:
+        cf_flat = (4.1 - 5.2 * phi) if square else (3.7 - 4.5 * phi)
+        branch = "0.025–0.44: 4.1 − 5.2Φ" if square else "0.025–0.44: 3.7 − 4.5Φ"
+    elif phi <= 0.69:
+        cf_flat = 1.8 if square else 1.7
+        branch = "0.45–0.69"
     else:
-        WX_mm = float(inputs["WX_mm"])
-        WY_mm = float(inputs["WY_mm"])
-        D_mm = None
-        WX_m = WX_mm * MM_TO_M
-        WY_m = WY_mm * MM_TO_M
-        width_label_x = f"W_X = {_f(WX_mm, 1)} mm"
-        width_label_y = f"W_Y = {_f(WY_mm, 1)} mm"
+        cf_flat = (1.3 - 0.7 * phi) if square else (1.0 + phi)
+        branch = "0.70–1.00: 1.3 − 0.7Φ" if square else "0.70–1.00: 1.0 + Φ"
 
-    plinth_height_m = plinth_height_mm * MM_TO_M
-    plinth_width_m = plinth_width_mm * MM_TO_M
+    cc = None
+    cf = cf_flat
+    if member_type == "round":
+        cc = cc_round(phi)
+        cf = cf_flat * cc
+    return {"cf": cf, "cf_flat": cf_flat, "cc": cc, "branch": branch,
+            "cross_section": cross_section, "member_type": member_type}
 
-    # =====================================================================
-    # STEP 3 -- Kz (terrain exposure coefficient), Table 3-1
-    # =====================================================================
-    kz_info = compute_kz(H_ft, exposure)
+
+# ---------------------------------------------------------------------------
+# Velocity pressure (SI)
+# ---------------------------------------------------------------------------
+def velocity_pressure_pa(Kz: float, V_ms: float, IFW: float) -> float:
+    """qz = Q * Kz * V_ms^2 * IFW  (SI), returns Pascals."""
+    return Q_SI * Kz * V_ms ** 2 * IFW
+
+
+# ===========================================================================
+# Per-element computation
+# ===========================================================================
+def _compute_element(el: Dict[str, Any], g: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute one stacked element. ``g`` holds the global parameters."""
+    label = str(el.get("label", "Element"))
+    kind = str(el.get("kind", "equipment_circular"))
+    V_ms = g["V_ms"]
+    IFW = g["IFW"]
+    exposure = g["exposure"]
+
+    # --- height model -------------------------------------------------------
+    z_base_m = float(el.get("z_base_mm", 0.0) or 0.0) * MM_TO_M
+    # Equipment may supply z_tip (overall tip above NGL); L = z_tip - z_base.
+    if el.get("z_tip_mm") not in (None, ""):
+        L_m = float(el["z_tip_mm"]) * MM_TO_M - z_base_m
+    else:
+        L_m = float(el.get("L_mm", 0.0) or 0.0) * MM_TO_M
+    L_m = max(L_m, 1e-6)
+    z_top_m = z_base_m + L_m
+
+    # Effective height for Kz (Sec. 3.1.5.2.2):
+    #   "tip"      -> top of element            (default; conservative)
+    #   "centroid" -> z_base + L/2              (less conservative; defensible)
+    #   "custom"   -> explicit kz_height_mm     (evaluate at a controlling
+    #                 reference height, e.g. a base plinth taken at the
+    #                 governing equipment height to match the project sheets)
+    kz_basis = str(el.get("kz_basis", "tip"))
+    if kz_basis == "custom" and el.get("kz_height_mm") not in (None, ""):
+        z_eff_m = float(el["kz_height_mm"]) * MM_TO_M
+    elif kz_basis == "centroid":
+        z_eff_m = z_base_m + L_m / 2.0
+    else:
+        z_eff_m = z_top_m
+    h_ft = z_eff_m * M_TO_FT
+
+    # --- Kz & GRF -----------------------------------------------------------
+    kz_info = compute_kz(h_ft, exposure)
     Kz = kz_info["kz"]
-
-    # =====================================================================
-    # GRF lookup (used in Step 1 echo + Step 6)
-    # =====================================================================
-    grf_info = compute_grf(grf_type, H_ft, exposure)
+    grf_type = str(el.get("grf_type", "rigid"))
+    grf_info = compute_grf(grf_type, h_ft, exposure)
     GRF = grf_info["grf"]
 
-    # =====================================================================
-    # STEP 4 -- velocity pressure  qz = Q * Kz * V^2 * IFW
-    # =====================================================================
-    qz_psf = Q * Kz * V_mph ** 2 * IFW
-    qz_kpa = qz_psf * PSF_TO_KPA
+    # --- velocity pressure --------------------------------------------------
+    qz_pa = velocity_pressure_pa(Kz, V_ms, IFW)
+    qz_kpa = qz_pa * PA_TO_KPA
 
-    # =====================================================================
-    # STEP 5 -- projected wind areas
-    # =====================================================================
-    # Body: X-direction wind acts on the front face (width = WX), Y on side.
-    A_body_x_m2 = WX_m * H_m
-    A_body_y_m2 = WY_m * H_m
-    A_body_x_ft2 = A_body_x_m2 * M2_TO_FT2
-    A_body_y_ft2 = A_body_y_m2 * M2_TO_FT2
+    # --- kind-specific area / Cf / force ------------------------------------
+    # All forces in kN, pressures in kPa, line loads in kN/m.
+    # The centroid elevation zbar is the line of action used for overturning.
+    zbar_m = z_base_m + L_m / 2.0
+    extra: Dict[str, Any] = {}      # kind-specific detail for the report
+    cf_used = None
 
-    # Plinth: always a square section, identical projected area both directions.
-    if include_plinth:
-        A_plinth_m2 = plinth_width_m * plinth_height_m
+    if kind == "equipment_circular":
+        D_m = float(el["D_mm"]) * MM_TO_M
+        cf_used = float(el.get("cf", 0.9))
+        b_x = b_y = D_m
+        A_x = A_y = D_m * L_m
+        p_kpa = qz_kpa * GRF * cf_used
+        Fx = p_kpa * A_x
+        Fy = p_kpa * A_y
+        w_x = p_kpa * b_x
+        w_y = p_kpa * b_y
+        draw_w = D_m
+        extra = {"D_m": D_m}
+
+    elif kind == "equipment_rectangular":
+        WX_m = float(el["WX_mm"]) * MM_TO_M
+        WY_m = float(el["WY_mm"]) * MM_TO_M
+        cf_used = float(el.get("cf", 2.0))
+        b_x, b_y = WX_m, WY_m
+        A_x, A_y = WX_m * L_m, WY_m * L_m
+        p_kpa = qz_kpa * GRF * cf_used
+        Fx = p_kpa * A_x
+        Fy = p_kpa * A_y
+        w_x = p_kpa * b_x
+        w_y = p_kpa * b_y
+        draw_w = WX_m
+        extra = {"WX_m": WX_m, "WY_m": WY_m}
+
+    elif kind == "pedestal_plinth":
+        width_m = float(el["width_mm"]) * MM_TO_M
+        height_m = float(el.get("height_mm", el.get("L_mm", 0))) * MM_TO_M
+        cf_used = float(el.get("cf", 2.0))
+        b_x = b_y = width_m
+        A_x = A_y = width_m * height_m
+        p_kpa = qz_kpa * GRF * cf_used
+        Fx = Fy = p_kpa * A_x
+        w_x = w_y = p_kpa * b_x
+        draw_w = width_m
+        zbar_m = z_base_m + height_m / 2.0
+        extra = {"width_m": width_m, "height_m": height_m}
+
+    elif kind == "lattice_truss":
+        route = str(el.get("route", "A"))
+        if route == "A":
+            # --- Route A: solidity method (one solid face). ---
+            fw_m = float(el["face_width_mm"]) * MM_TO_M
+            fh_m = float(el.get("face_height_mm", el.get("L_mm", 0))) * MM_TO_M
+            Ag = fw_m * fh_m
+            phi = float(el["phi"])
+            cross = str(el.get("cross_section", "square"))
+            mtype = str(el.get("member_type", "flat"))
+            cinfo = truss_cf_solidity(phi, cross, mtype)
+            cf_used = cinfo["cf"]
+            yawed = bool(el.get("yawed_wind", False)) and cross == "square"
+            if yawed:
+                cf_used *= 1.15
+            A_solid = phi * Ag
+            b = A_solid / max(fh_m, 1e-6)         # smeared solid width
+            p_kpa = qz_kpa * GRF * cf_used
+            Fx = Fy = p_kpa * A_solid
+            w_x = w_y = p_kpa * b
+            A_x = A_y = A_solid
+            b_x = b_y = b
+            draw_w = fw_m
+            zbar_m = z_base_m + fh_m / 2.0
+            extra = {"route": "A", "face_w_m": fw_m, "face_h_m": fh_m,
+                     "Ag": Ag, "phi": phi, "A_solid": A_solid,
+                     "cf_info": cinfo, "yawed": yawed}
+        else:
+            # --- Route B: member-by-member (no shielding credit). ---
+            members = el.get("members", [])
+            rows = []
+            F_sum = 0.0
+            A_sum = 0.0
+            for m in members:
+                b_m = float(m["b_mm"]) * MM_TO_M
+                L_mem = float(m["L_mm"]) * MM_TO_M
+                n = float(m.get("n", 1))
+                shape = str(m.get("shape", "flat"))
+                ar = L_mem / max(b_m, 1e-6)
+                cinfo = aspect_ratio_c(ar)
+                c = cinfo["c"]
+                base_cf = 1.6 if shape != "round" else 0.9   # Table 3-9
+                cf_m = c * base_cf
+                A_m = b_m * L_mem * n
+                p_m = qz_kpa * GRF * cf_m
+                F_m = p_m * A_m
+                F_sum += F_m
+                A_sum += A_m
+                rows.append({"b_m": b_m, "L_m": L_mem, "n": n, "shape": shape,
+                             "ar": ar, "c": c, "cf_m": cf_m, "A_m": A_m,
+                             "p_m": p_m, "F_m": F_m})
+            Fx = Fy = F_sum
+            A_x = A_y = A_sum
+            p_kpa = (F_sum / A_sum) if A_sum > 0 else 0.0   # effective p = F/A
+            b = A_sum / max(L_m, 1e-6)
+            b_x = b_y = b
+            w_x = w_y = p_kpa * b
+            draw_w = max((r["b_m"] for r in rows), default=0.3) * 4
+            zbar_m = z_base_m + L_m / 2.0
+            extra = {"route": "B", "rows": rows, "A_sum": A_sum, "F_sum": F_sum}
     else:
-        A_plinth_m2 = 0.0
-    A_plinth_ft2 = A_plinth_m2 * M2_TO_FT2
+        raise ValueError(f"Unknown element kind: {kind!r}")
 
-    # =====================================================================
-    # STEP 6 -- wind forces  F = qz * GRF * Cf * A
-    # =====================================================================
-    def force_lb(area_ft2: float, cf: float) -> float:
-        return qz_psf * GRF * cf * area_ft2
+    governing = "X = Y (symmetric)" if abs(Fx - Fy) < 1e-9 else \
+        ("X" if Fx >= Fy else "Y")
 
-    F_body_x_lb = force_lb(A_body_x_ft2, cf_body)
-    F_body_y_lb = force_lb(A_body_y_ft2, cf_body)
-    F_plinth_lb = force_lb(A_plinth_ft2, cf_plinth)
+    res = {
+        "label": label, "kind": kind,
+        "z_base_m": z_base_m, "L_m": L_m, "z_top_m": z_top_m,
+        "z_eff_m": z_eff_m, "h_ft": h_ft, "kz_basis": kz_basis,
+        "Kz": Kz, "kz_info": kz_info,
+        "grf_type": grf_type, "GRF": GRF, "grf_info": grf_info,
+        "qz_pa": qz_pa, "qz_kpa": qz_kpa,
+        "cf": cf_used, "p_kpa": p_kpa,
+        "A_x": A_x, "A_y": A_y, "b_x": b_x, "b_y": b_y,
+        "w_x": w_x, "w_y": w_y, "Fx": Fx, "Fy": Fy,
+        "zbar_m": zbar_m, "governing": governing,
+        "draw_w_m": draw_w, "extra": extra,
+    }
+    res["steps"] = _element_steps(res, g)
+    return res
 
-    F_body_x_kN = F_body_x_lb * LB_TO_KN
-    F_body_y_kN = F_body_y_lb * LB_TO_KN
-    F_plinth_kN = F_plinth_lb * LB_TO_KN
 
-    FX_kN = F_body_x_kN + F_plinth_kN
-    FY_kN = F_body_y_kN + F_plinth_kN
+# ===========================================================================
+# Main entry point
+# ===========================================================================
+def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the full stacked MOP 113 Eq. 3-1 (SI) calculation.
 
-    # Equivalent applied face pressure F/A (kPa) for each element.
-    def face_pressure_kpa(F_lb: float, area_ft2: float) -> float:
-        if area_ft2 <= 0:
-            return 0.0
-        return (F_lb / area_ft2) * PSF_TO_KPA
+    ``inputs`` shape::
 
-    p_body_x_kpa = face_pressure_kpa(F_body_x_lb, A_body_x_ft2)
-    p_body_y_kpa = face_pressure_kpa(F_body_y_lb, A_body_y_ft2)
-    p_plinth_kpa = face_pressure_kpa(F_plinth_lb, A_plinth_ft2)
+        {
+          "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": false,
+          "elements": [ {element 1}, {element 2}, ... ]   # top-to-bottom or any order
+        }
 
-    # Governing direction.
-    if shape == "circular":
-        governing = "X = Y (symmetric)"
-    else:
-        governing = "X" if FX_kN >= FY_kN else "Y"
+    Each element dict carries ``label``, ``kind`` and the kind-specific fields
+    documented in ``_compute_element``.  The foundation carries no wind and is
+    simply not included in the stack.
+    """
+    V_kph = float(inputs["V_kph"])
+    V_ms = V_kph * KPH_TO_MS
+    V_mph = V_kph * KPH_TO_MPH
+    IFW = float(inputs["IFW"])
+    exposure = str(inputs.get("exposure", "C")).upper()
+    apply_075 = bool(inputs.get("apply_075", False))
 
-    # =====================================================================
-    # STEP 7 -- resultant  FR = sqrt(FX^2 + FY^2)
-    # =====================================================================
-    FR_kN_full = math.sqrt(FX_kN ** 2 + FY_kN ** 2)
-    FR_kN = FR_kN_full * (0.75 if apply_075 else 1.0)
+    g = {"V_kph": V_kph, "V_ms": V_ms, "V_mph": V_mph, "IFW": IFW,
+         "exposure": exposure, "Q": Q_SI}
 
-    # =====================================================================
-    # Build LaTeX report steps (numbers already substituted)
-    # =====================================================================
-    steps = _build_steps(
-        tag=tag, Q=Q, V_kph=V_kph, V_mph=V_mph, IFW=IFW, exposure=exposure,
-        grf_info=grf_info, GRF=GRF, cf_body=cf_body, cf_plinth=cf_plinth,
-        shape=shape, H_mm=H_mm, H_m=H_m, H_ft=H_ft, D_mm=D_mm,
-        weight_kg=weight_kg, weight_kN=weight_kN,
-        WX_m=WX_m, WY_m=WY_m, width_label_x=width_label_x,
-        width_label_y=width_label_y,
-        include_plinth=include_plinth, plinth_width_m=plinth_width_m,
-        plinth_height_m=plinth_height_m, plinth_width_mm=plinth_width_mm,
-        plinth_height_mm=plinth_height_mm,
-        kz_info=kz_info, Kz=Kz, qz_psf=qz_psf, qz_kpa=qz_kpa,
-        A_body_x_m2=A_body_x_m2, A_body_y_m2=A_body_y_m2,
-        A_body_x_ft2=A_body_x_ft2, A_body_y_ft2=A_body_y_ft2,
-        A_plinth_m2=A_plinth_m2, A_plinth_ft2=A_plinth_ft2,
-        F_body_x_lb=F_body_x_lb, F_body_y_lb=F_body_y_lb, F_plinth_lb=F_plinth_lb,
-        F_body_x_kN=F_body_x_kN, F_body_y_kN=F_body_y_kN, F_plinth_kN=F_plinth_kN,
-        FX_kN=FX_kN, FY_kN=FY_kN, FR_kN_full=FR_kN_full, FR_kN=FR_kN,
-        p_body_x_kpa=p_body_x_kpa, p_body_y_kpa=p_body_y_kpa,
-        p_plinth_kpa=p_plinth_kpa, governing=governing, apply_075=apply_075,
-    )
+    elements = [_compute_element(el, g) for el in inputs.get("elements", [])]
 
-    # =====================================================================
-    # Figure data arrays for Plotly
-    # =====================================================================
-    figures = _build_figures(
-        exposure=exposure, kz_info=kz_info, Kz=Kz, H_ft=H_ft,
-        F_body_x_kN=F_body_x_kN, F_body_y_kN=F_body_y_kN, F_plinth_kN=F_plinth_kN,
-        shape=shape, H_m=H_m, WX_m=WX_m, WY_m=WY_m,
-        include_plinth=include_plinth,
-        plinth_width_m=plinth_width_m, plinth_height_m=plinth_height_m,
-        governing=governing, tag=tag,
-    )
+    # --- assembly aggregate -------------------------------------------------
+    FX = sum(e["Fx"] for e in elements)
+    FY = sum(e["Fy"] for e in elements)
+    FR_full = math.sqrt(FX ** 2 + FY ** 2)
+    FR = FR_full * (0.75 if apply_075 else 1.0)
 
-    # =====================================================================
-    # Assemble result dict
-    # =====================================================================
+    # Base shear = total wind force per direction (all elements act above base).
+    base_shear_x, base_shear_y = FX, FY
+    # Overturning about the base: M = sum(F_i * zbar_i) per direction.
+    Mx = sum(e["Fx"] * e["zbar_m"] for e in elements)
+    My = sum(e["Fy"] * e["zbar_m"] for e in elements)
+    M_gov = max(Mx, My)
+
+    governing = "X = Y (symmetric)" if abs(FX - FY) < 1e-9 else \
+        ("X" if FX >= FY else "Y")
+
+    assembly_steps = _assembly_steps(elements, FX, FY, FR_full, FR, apply_075,
+                                     base_shear_x, base_shear_y, Mx, My, governing)
+
+    figures = _build_figures(elements, exposure, FX, FY, governing)
+
     return {
-        "inputs_echo": {
-            "tag": tag, "V_kph": V_kph, "V_mph": V_mph, "shape": shape,
-            "H_mm": H_mm, "H_m": H_m, "H_ft": H_ft, "D_mm": D_mm,
-            "weight_kg": weight_kg, "weight_kN": weight_kN,
-            "include_plinth": include_plinth,
-            "plinth_height_mm": plinth_height_mm, "plinth_width_mm": plinth_width_mm,
-            "Q": Q, "IFW": IFW, "exposure": exposure,
-            "grf_type": grf_type, "GRF": GRF, "grf_desc": grf_info["desc"],
-            "cf_body": cf_body, "cf_plinth": cf_plinth, "apply_075": apply_075,
-        },
-        "kz": {
-            "Kz": Kz, "H_ft": H_ft, "method": kz_info["method"], **kz_info,
-        },
-        "grf": grf_info,
-        "qz": {"psf": qz_psf, "kpa": qz_kpa},
-        "areas": {
-            "A_body_x_m2": A_body_x_m2, "A_body_y_m2": A_body_y_m2,
-            "A_body_x_ft2": A_body_x_ft2, "A_body_y_ft2": A_body_y_ft2,
-            "A_plinth_m2": A_plinth_m2, "A_plinth_ft2": A_plinth_ft2,
-        },
-        "forces": {
-            "F_body_x_kN": F_body_x_kN, "F_body_y_kN": F_body_y_kN,
-            "F_plinth_kN": F_plinth_kN, "FX_kN": FX_kN, "FY_kN": FY_kN,
-            "FR_kN": FR_kN, "FR_kN_full": FR_kN_full,
-            "p_body_x_kpa": p_body_x_kpa, "p_body_y_kpa": p_body_y_kpa,
-            "p_plinth_kpa": p_plinth_kpa,
-        },
+        "globals": g,
+        "note": DUAL_CONSTANT_NOTE,
+        "elements": elements,
         "summary": {
-            "qz_kpa": qz_kpa, "FX_kN": FX_kN, "FY_kN": FY_kN,
-            "FR_kN": FR_kN, "governing": governing,
+            "FX_kN": FX, "FY_kN": FY, "FR_kN": FR, "FR_kN_full": FR_full,
+            "governing": governing,
+            "base_shear_x_kN": base_shear_x, "base_shear_y_kN": base_shear_y,
+            "Mx_kNm": Mx, "My_kNm": My, "M_gov_kNm": M_gov,
+            "per_element": [
+                {"label": e["label"], "qz_kpa": e["qz_kpa"], "p_kpa": e["p_kpa"],
+                 "w_x": e["w_x"], "w_y": e["w_y"], "Fx": e["Fx"], "Fy": e["Fy"],
+                 "Kz": e["Kz"], "governing": e["governing"]}
+                for e in elements
+            ],
         },
-        "steps": steps,
+        "assembly_steps": assembly_steps,
         "figures": figures,
     }
 
 
 # ---------------------------------------------------------------------------
-# LaTeX report builder
+# LaTeX builders
 # ---------------------------------------------------------------------------
-def _build_steps(**v) -> List[Dict[str, Any]]:
-    """Assemble the 7-step report. Each step carries a title and a list of LaTeX
-    lines (symbolic equation followed by the substituted-number version)."""
-    steps: List[Dict[str, Any]] = []
-
-    # ---- Step 1 -- wind parameters --------------------------------------
-    grf_note = v["grf_info"]["desc"]
-    if v["grf_info"]["method"] != "rigid":
-        grf_note += f", band {v['grf_info']['band']}"
-    steps.append({
-        "n": 1, "title": "Wind parameters",
-        "lines": [
-            r"\text{Air density factor (Eq. 3-1): } Q = " + _f(v["Q"], 5)
-            + r"\ \text{lb/ft}^2\text{/mph}^2",
-            r"\text{Wind speed: } V = " + _f(v["V_kph"], 1)
-            + r"\ \text{kph} \times 0.621371 = " + _f(v["V_mph"], 3)
-            + r"\ \text{mph}",
-            r"\text{Importance factor (Table 3-3): } I_{FW} = " + _f(v["IFW"], 2),
-            r"\text{Gust response factor (Sec. 3.1.5.5): } GRF = "
-            + _f(v["GRF"], 3) + r"\quad (\text{" + grf_note + r"})",
-            r"\text{Force coefficient (Table 3-9): } C_{f,\text{body}} = "
-            + _f(v["cf_body"], 2) + r",\ C_{f,\text{plinth}} = "
-            + _f(v["cf_plinth"], 2),
-        ],
-    })
-
-    # ---- Step 2 -- dimensions -------------------------------------------
-    dim_lines = [
-        r"\text{Tip height: } H = " + _f(v["H_mm"], 0) + r"\ \text{mm} = "
-        + _f(v["H_m"], 3) + r"\ \text{m} = " + _f(v["H_ft"], 3) + r"\ \text{ft}",
-    ]
-    if v["shape"] == "circular":
-        dim_lines.append(
-            r"\text{Diameter: } D = " + _f(v["D_mm"], 1) + r"\ \text{mm}"
-            + r"\quad(\text{circular: } W_X = W_Y = D)")
-    else:
-        dim_lines.append(
-            r"\text{Front-face width: } W_X = " + _f(v["WX_m"] * 1000, 1)
-            + r"\ \text{mm},\quad \text{side-face width: } W_Y = "
-            + _f(v["WY_m"] * 1000, 1) + r"\ \text{mm}")
-    dim_lines.append(
-        r"\text{Weight: } " + _f(v["weight_kg"], 1) + r"\ \text{kg} = "
-        + _f(v["weight_kN"], 3) + r"\ \text{kN}\quad(\text{display only, "
-        + r"not used in wind force})")
-    if v["include_plinth"]:
-        dim_lines.append(
-            r"\text{Plinth: } " + _f(v["plinth_width_mm"], 0)
-            + r"\ \text{mm square} \times " + _f(v["plinth_height_mm"], 0)
-            + r"\ \text{mm high}")
-    steps.append({"n": 2, "title": "Dimensions", "lines": dim_lines})
-
-    # ---- Step 3 -- Kz ---------------------------------------------------
-    ki = v["kz_info"]
+def _kz_lines(e: Dict[str, Any], exposure: str) -> List[str]:
+    ki = e["kz_info"]
+    basis = {"tip": "tip / top of element", "centroid": "centroid",
+             "custom": "custom reference height"}.get(e["kz_basis"], "tip")
+    head = (r"\text{Effective height (" + basis + r", §3.1.5.2.2): } z = "
+            + _f(e["z_eff_m"], 3) + r"\ \text{m} = " + _f(e["h_ft"], 3)
+            + r"\ \text{ft}")
     if ki["method"] == "interp":
-        kz_lines = [
+        return [
+            head,
             r"K_z = K_{z,lo} + \dfrac{h - h_{lo}}{h_{hi} - h_{lo}}\,"
-            r"(K_{z,hi} - K_{z,lo})\quad(\text{Table 3-1, Exp. "
-            + v["exposure"] + r"})",
-            r"\text{Bracketing rows: } (h_{lo}, K_{z,lo}) = ("
-            + _f(ki["h_lo"], 0) + r"\,\text{ft}, " + _f(ki["kz_lo"], 3)
-            + r"),\quad (h_{hi}, K_{z,hi}) = (" + _f(ki["h_hi"], 0)
-            + r"\,\text{ft}, " + _f(ki["kz_hi"], 3) + r")",
-            r"K_z = " + _f(ki["kz_lo"], 3) + r" + \dfrac{"
-            + _f(v["H_ft"], 3) + r" - " + _f(ki["h_lo"], 0) + r"}{"
-            + _f(ki["h_hi"], 0) + r" - " + _f(ki["h_lo"], 0) + r"}\,("
-            + _f(ki["kz_hi"], 3) + r" - " + _f(ki["kz_lo"], 3) + r") = "
-            + _f(v["Kz"], 4),
+            r"(K_{z,hi} - K_{z,lo})\quad(\text{Table 3-1, Exp. " + exposure + r"})",
+            r"K_z = " + _f(ki["kz_lo"], 3) + r" + \dfrac{" + _f(e["h_ft"], 3)
+            + r" - " + _f(ki["h_lo"], 0) + r"}{" + _f(ki["h_hi"], 0) + r" - "
+            + _f(ki["h_lo"], 0) + r"}\,(" + _f(ki["kz_hi"], 3) + r" - "
+            + _f(ki["kz_lo"], 3) + r") = " + _f(e["Kz"], 4),
         ]
-    elif ki["method"] == "floor":
-        kz_lines = [
-            r"h \leq 15\ \text{ft} \Rightarrow K_z = "
-            + r"\text{(0--15 row, Exp. " + v["exposure"] + r")} = "
-            + _f(v["Kz"], 4),
-        ]
-    else:  # powerlaw
-        kz_lines = [
+    if ki["method"] == "floor":
+        return [head, r"h \leq 15\ \text{ft} \Rightarrow K_z = "
+                + r"\text{(0--15 row, Exp. " + exposure + r")} = " + _f(e["Kz"], 4)]
+    return [head,
             r"h > 100\ \text{ft} \Rightarrow K_z = 2.01\left(\dfrac{z}{z_g}"
-            r"\right)^{2/\alpha}\quad(\text{Eq. 3-2, Table 3-2, Exp. "
-            + v["exposure"] + r"})",
-            r"K_z = 2.01\left(\dfrac{" + _f(v["H_ft"], 3) + r"}{"
-            + _f(ki["zg"], 0) + r"}\right)^{2/" + _f(ki["alpha"], 1)
-            + r"} = " + _f(v["Kz"], 4),
+            r"\right)^{2/\alpha} = 2.01\left(\dfrac{" + _f(e["h_ft"], 3) + r"}{"
+            + _f(ki["zg"], 0) + r"}\right)^{2/" + _f(ki["alpha"], 1) + r"} = "
+            + _f(e["Kz"], 4)]
+
+
+def _element_steps(e: Dict[str, Any], g: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build the per-element LaTeX report (numbers already substituted)."""
+    steps: List[Dict[str, Any]] = []
+    exposure = g["exposure"]
+
+    # 1 -- height & Kz
+    steps.append({"title": "Effective height &amp; $K_z$ (Table 3-1)",
+                  "lines": _kz_lines(e, exposure)})
+
+    # 2 -- velocity pressure
+    steps.append({"title": "Velocity pressure $q_z$ (SI)", "lines": [
+        r"q_z = Q \cdot K_z \cdot V_{ms}^2 \cdot I_{FW}",
+        r"q_z = " + _f(g["Q"], 3) + r" \times " + _f(e["Kz"], 4) + r" \times "
+        + _f(g["V_ms"], 3) + r"^2 \times " + _f(g["IFW"], 2) + r" = "
+        + _f(e["qz_pa"], 1) + r"\ \text{Pa} = " + _f(e["qz_kpa"], 4)
+        + r"\ \text{kPa}",
+    ]})
+
+    # 3 -- design pressure & force, kind-specific
+    GRF = e["GRF"]
+    ex = e["extra"]
+    if e["kind"] in ("equipment_circular", "equipment_rectangular", "pedestal_plinth"):
+        cf = e["cf"]
+        lines = [
+            r"p = q_z \cdot GRF \cdot C_f = " + _f(e["qz_kpa"], 4) + r" \times "
+            + _f(GRF, 3) + r" \times " + _f(cf, 2) + r" = " + _f(e["p_kpa"], 4)
+            + r"\ \text{kPa}",
         ]
-    steps.append({"n": 3, "title": "Terrain exposure coefficient $K_z$",
-                  "lines": kz_lines})
+        if e["kind"] == "equipment_circular":
+            D = ex["D_m"]
+            lines += [
+                r"A = D \cdot L = " + _f(D, 4) + r" \times " + _f(e["L_m"], 3)
+                + r" = " + _f(e["A_x"], 4) + r"\ \text{m}^2\quad(b = D = "
+                + _f(D, 4) + r"\ \text{m})",
+                r"w = p \cdot b = " + _f(e["p_kpa"], 4) + r" \times " + _f(D, 4)
+                + r" = " + _f(e["w_x"], 4) + r"\ \text{kN/m}",
+                r"F = p \cdot A = " + _f(e["p_kpa"], 4) + r" \times "
+                + _f(e["A_x"], 4) + r" = " + _f(e["Fx"], 3)
+                + r"\ \text{kN}\quad(F_X = F_Y,\ \text{circular})",
+            ]
+        elif e["kind"] == "equipment_rectangular":
+            lines += [
+                r"A_X = W_X \cdot L = " + _f(ex["WX_m"], 4) + r" \times "
+                + _f(e["L_m"], 3) + r" = " + _f(e["A_x"], 4) + r"\ \text{m}^2,"
+                r"\quad A_Y = W_Y \cdot L = " + _f(ex["WY_m"], 4) + r" \times "
+                + _f(e["L_m"], 3) + r" = " + _f(e["A_y"], 4) + r"\ \text{m}^2",
+                r"F_X = p \cdot A_X = " + _f(e["Fx"], 3) + r"\ \text{kN},\quad "
+                r"F_Y = p \cdot A_Y = " + _f(e["Fy"], 3) + r"\ \text{kN}\quad("
+                + e["governing"] + r"\ \text{governs})",
+                r"w_X = p \cdot W_X = " + _f(e["w_x"], 4) + r"\ \text{kN/m},\quad "
+                r"w_Y = p \cdot W_Y = " + _f(e["w_y"], 4) + r"\ \text{kN/m}",
+            ]
+        else:  # plinth
+            lines += [
+                r"A = w_p \cdot h_p = " + _f(ex["width_m"], 3) + r" \times "
+                + _f(ex["height_m"], 3) + r" = " + _f(e["A_x"], 4)
+                + r"\ \text{m}^2",
+                r"w = p \cdot b = " + _f(e["w_x"], 4) + r"\ \text{kN/m},\quad "
+                r"F = p \cdot A = " + _f(e["Fx"], 3) + r"\ \text{kN}",
+            ]
+        steps.append({"title": "Design pressure, area &amp; force", "lines": lines})
 
-    # ---- Step 4 -- velocity pressure ------------------------------------
-    steps.append({
-        "n": 4, "title": "Velocity pressure $q_z$",
-        "lines": [
-            r"q_z = Q \cdot K_z \cdot V^2 \cdot I_{FW}",
-            r"q_z = " + _f(v["Q"], 5) + r" \times " + _f(v["Kz"], 4)
-            + r" \times " + _f(v["V_mph"], 3) + r"^2 \times " + _f(v["IFW"], 2)
-            + r" = " + _f(v["qz_psf"], 3) + r"\ \text{lb/ft}^2 = "
-            + _f(v["qz_kpa"], 4) + r"\ \text{kPa}",
-        ],
-    })
-
-    # ---- Step 5 -- projected areas --------------------------------------
-    if v["shape"] == "circular":
-        area_lines = [
-            r"A_{body} = D \times H = " + _f(v["WX_m"], 4) + r" \times "
-            + _f(v["H_m"], 3) + r" = " + _f(v["A_body_x_m2"], 4)
-            + r"\ \text{m}^2 = " + _f(v["A_body_x_ft2"], 3) + r"\ \text{ft}^2"
-            + r"\quad(\text{same both directions})",
+    elif e["kind"] == "lattice_truss" and ex["route"] == "A":
+        ci = ex["cf_info"]
+        lines = [
+            r"\text{Gross face area } A_g = b_f \cdot h_f = " + _f(ex["face_w_m"], 3)
+            + r" \times " + _f(ex["face_h_m"], 3) + r" = " + _f(ex["Ag"], 4)
+            + r"\ \text{m}^2,\quad \Phi = " + _f(ex["phi"], 3),
+            r"C_f\ (\text{Table 3-8, " + ci["cross_section"] + r", "
+            + ci["branch"] + r"}) = " + _f(ci["cf_flat"], 3),
         ]
-    else:
-        area_lines = [
-            r"A_X = W_X \times H = " + _f(v["WX_m"], 4) + r" \times "
-            + _f(v["H_m"], 3) + r" = " + _f(v["A_body_x_m2"], 4)
-            + r"\ \text{m}^2 = " + _f(v["A_body_x_ft2"], 3) + r"\ \text{ft}^2",
-            r"A_Y = W_Y \times H = " + _f(v["WY_m"], 4) + r" \times "
-            + _f(v["H_m"], 3) + r" = " + _f(v["A_body_y_m2"], 4)
-            + r"\ \text{m}^2 = " + _f(v["A_body_y_ft2"], 3) + r"\ \text{ft}^2",
+        if ci["cc"] is not None:
+            lines.append(r"\text{Round members: } C_f = C_f \cdot C_c = "
+                         + _f(ci["cf_flat"], 3) + r" \times " + _f(ci["cc"], 3)
+                         + r" = " + _f(ci["cf"], 3) + r"\quad(\text{Table 3-10})")
+        if ex["yawed"]:
+            lines.append(r"\text{Yawed wind (square, §3.1.5.6): } C_f \times 1.15 = "
+                         + _f(e["cf"], 3))
+        lines += [
+            r"A_{solid} = \Phi \cdot A_g = " + _f(ex["phi"], 3) + r" \times "
+            + _f(ex["Ag"], 4) + r" = " + _f(ex["A_solid"], 4) + r"\ \text{m}^2",
+            r"p = q_z \cdot GRF \cdot C_f = " + _f(e["qz_kpa"], 4) + r" \times "
+            + _f(GRF, 3) + r" \times " + _f(e["cf"], 3) + r" = " + _f(e["p_kpa"], 4)
+            + r"\ \text{kPa}",
+            r"F = p \cdot A_{solid} = " + _f(e["Fx"], 3) + r"\ \text{kN},\quad "
+            r"w = p \cdot b = " + _f(e["w_x"], 4) + r"\ \text{kN/m}\ (b = \Phi b_f)",
         ]
-    if v["include_plinth"]:
-        area_lines.append(
-            r"A_{plinth} = w_p \times h_p = " + _f(v["plinth_width_m"], 3)
-            + r" \times " + _f(v["plinth_height_m"], 3) + r" = "
-            + _f(v["A_plinth_m2"], 4) + r"\ \text{m}^2 = "
-            + _f(v["A_plinth_ft2"], 3) + r"\ \text{ft}^2")
-    steps.append({"n": 5, "title": "Projected wind areas", "lines": area_lines})
+        steps.append({"title": "Lattice support — Route A (solidity, Table 3-8)",
+                      "lines": lines})
 
-    # ---- Step 6 -- wind forces ------------------------------------------
-    force_lines = [r"F = q_z \cdot GRF \cdot C_f \cdot A"]
-    # Body X
-    force_lines.append(
-        r"F_{body,X} = " + _f(v["qz_psf"], 3) + r" \times " + _f(v["GRF"], 3)
-        + r" \times " + _f(v["cf_body"], 2) + r" \times "
-        + _f(v["A_body_x_ft2"], 3) + r" = " + _f(v["F_body_x_lb"], 1)
-        + r"\ \text{lb} = " + _f(v["F_body_x_kN"], 3) + r"\ \text{kN}"
-        + r"\quad(F/A = " + _f(v["p_body_x_kpa"], 4) + r"\ \text{kPa})")
-    # Body Y (only show separately if asymmetric)
-    if v["shape"] != "circular":
-        force_lines.append(
-            r"F_{body,Y} = " + _f(v["qz_psf"], 3) + r" \times " + _f(v["GRF"], 3)
-            + r" \times " + _f(v["cf_body"], 2) + r" \times "
-            + _f(v["A_body_y_ft2"], 3) + r" = " + _f(v["F_body_y_lb"], 1)
-            + r"\ \text{lb} = " + _f(v["F_body_y_kN"], 3) + r"\ \text{kN}"
-            + r"\quad(F/A = " + _f(v["p_body_y_kpa"], 4) + r"\ \text{kPa})")
-    # Plinth
-    if v["include_plinth"]:
-        force_lines.append(
-            r"F_{plinth} = " + _f(v["qz_psf"], 3) + r" \times " + _f(v["GRF"], 3)
-            + r" \times " + _f(v["cf_plinth"], 2) + r" \times "
-            + _f(v["A_plinth_ft2"], 3) + r" = " + _f(v["F_plinth_lb"], 1)
-            + r"\ \text{lb} = " + _f(v["F_plinth_kN"], 3) + r"\ \text{kN}"
-            + r"\quad(F/A = " + _f(v["p_plinth_kpa"], 4) + r"\ \text{kPa})")
-    # Totals
-    force_lines.append(
-        r"\text{Total } F_X = " + _f(v["F_body_x_kN"], 3) + r" + "
-        + _f(v["F_plinth_kN"], 3) + r" = " + _f(v["FX_kN"], 3) + r"\ \text{kN}")
-    force_lines.append(
-        r"\text{Total } F_Y = " + _f(v["F_body_y_kN"], 3) + r" + "
-        + _f(v["F_plinth_kN"], 3) + r" = " + _f(v["FY_kN"], 3) + r"\ \text{kN}")
-    if v["shape"] != "circular":
-        force_lines.append(
-            r"\Rightarrow \text{Direction } " + v["governing"]
-            + r"\ \text{governs (larger force).}")
-    steps.append({"n": 6, "title": "Wind forces", "lines": force_lines})
+    elif e["kind"] == "lattice_truss" and ex["route"] == "B":
+        lines = [r"\text{Per member: } AR = L/b,\ c\ (\text{Table 3-7}),\ "
+                 r"C_f = c \cdot 1.6\ (\text{Table 3-9}),\ F = q_z\,GRF\,C_f\,A"]
+        for i, r in enumerate(ex["rows"], 1):
+            lines.append(
+                r"\text{m}_{" + str(i) + r"}:\ AR = " + _f(r["ar"], 2)
+                + r",\ c = " + _f(r["c"], 2) + r",\ C_f = " + _f(r["cf_m"], 3)
+                + r",\ A = " + _f(r["A_m"], 4) + r"\ \text{m}^2,\ F = "
+                + _f(r["F_m"], 3) + r"\ \text{kN}")
+        lines.append(r"\sum F = " + _f(ex["F_sum"], 3) + r"\ \text{kN}\quad"
+                     r"(\text{no shielding credit; conservative})")
+        steps.append({"title": "Lattice support — Route B (member-by-member)",
+                      "lines": lines})
 
-    # ---- Step 7 -- resultant --------------------------------------------
-    res_lines = [
-        r"F_R = \sqrt{F_X^2 + F_Y^2}",
-        r"F_R = \sqrt{" + _f(v["FX_kN"], 3) + r"^2 + " + _f(v["FY_kN"], 3)
-        + r"^2} = " + _f(v["FR_kN_full"], 3) + r"\ \text{kN}",
+    return steps
+
+
+def _assembly_steps(elements, FX, FY, FR_full, FR, apply_075,
+                    bsx, bsy, Mx, My, governing) -> List[Dict[str, Any]]:
+    fx_terms = " + ".join(_f(e["Fx"], 3) for e in elements) or "0"
+    fy_terms = " + ".join(_f(e["Fy"], 3) for e in elements) or "0"
+    steps = [
+        {"title": "Totals", "lines": [
+            r"\text{Total } F_X = \sum F_{X,i} = " + fx_terms + r" = " + _f(FX, 3)
+            + r"\ \text{kN}",
+            r"\text{Total } F_Y = \sum F_{Y,i} = " + fy_terms + r" = " + _f(FY, 3)
+            + r"\ \text{kN}\quad(" + governing + r"\ \text{governs})",
+        ]},
+        {"title": "Resultant", "lines": [
+            r"F_R = \sqrt{F_X^2 + F_Y^2} = \sqrt{" + _f(FX, 3) + r"^2 + "
+            + _f(FY, 3) + r"^2} = " + _f(FR_full, 3) + r"\ \text{kN}",
+        ] + ([r"\text{Apply 0.75 two-face factor: } F_R = 0.75 \times "
+              + _f(FR_full, 3) + r" = " + _f(FR, 3) + r"\ \text{kN}"]
+             if apply_075 else
+             [r"\text{(0.75 two-face factor OFF — full vector sum per project sheets.)}"])},
+        {"title": "Base shear &amp; overturning", "lines": [
+            r"V_{base,X} = \sum F_{X,i} = " + _f(bsx, 3) + r"\ \text{kN},\quad "
+            r"V_{base,Y} = " + _f(bsy, 3) + r"\ \text{kN}",
+            r"M = \sum F_i\, \bar z_i \quad\Rightarrow\quad M_X = " + _f(Mx, 3)
+            + r"\ \text{kN·m},\quad M_Y = " + _f(My, 3) + r"\ \text{kN·m}",
+        ]},
     ]
-    if v["apply_075"]:
-        res_lines.append(
-            r"\text{Apply 0.75 wind-on-two-faces factor: } F_R = 0.75 \times "
-            + _f(v["FR_kN_full"], 3) + r" = " + _f(v["FR_kN"], 3) + r"\ \text{kN}")
-    else:
-        res_lines.append(
-            r"\text{(0.75 wind-on-two-faces factor not applied --- full vector "
-            r"sum per worked examples.)}")
-    steps.append({"n": 7, "title": "Resultant force $F_R$", "lines": res_lines})
-
     return steps
 
 
 # ---------------------------------------------------------------------------
 # Plotly figure data builder
 # ---------------------------------------------------------------------------
-def _build_figures(**v) -> Dict[str, Any]:
-    """Return raw data arrays the front end feeds straight into Plotly."""
-    # --- Figure 1: force breakdown grouped bars ---
+def _build_figures(elements, exposure, FX, FY, governing) -> Dict[str, Any]:
+    # Stack elevation schematic.
+    stack = []
+    for e in elements:
+        stack.append({
+            "label": e["label"], "kind": e["kind"],
+            "x0": -e["draw_w_m"] / 2.0, "x1": e["draw_w_m"] / 2.0,
+            "y0": round(e["z_base_m"], 4), "y1": round(e["z_top_m"], 4),
+            "Kz": round(e["Kz"], 4),
+            "F": round(max(e["Fx"], e["Fy"]), 3),
+            "z_base": round(e["z_base_m"], 3), "z_top": round(e["z_top_m"], 3),
+            "width": round(e["draw_w_m"], 3),
+        })
+    z_max = max((e["z_top_m"] for e in elements), default=1.0)
+    w_max = max((e["draw_w_m"] for e in elements), default=0.5)
+
+    # Force breakdown per element.
     force_breakdown = {
-        "directions": ["X", "Y"],
-        "body": [round(v["F_body_x_kN"], 3), round(v["F_body_y_kN"], 3)],
-        "plinth": [round(v["F_plinth_kN"], 3), round(v["F_plinth_kN"], 3)],
-        "totals": [round(v["F_body_x_kN"] + v["F_plinth_kN"], 3),
-                   round(v["F_body_y_kN"] + v["F_plinth_kN"], 3)],
-        "governing": v["governing"],
+        "labels": [e["label"] for e in elements],
+        "Fx": [round(e["Fx"], 3) for e in elements],
+        "Fy": [round(e["Fy"], 3) for e in elements],
+        "FX_total": round(FX, 3), "FY_total": round(FY, 3),
+        "governing": governing,
     }
 
-    # --- Figure 2: Kz interpolation curve for the selected exposure ---
-    exp = v["exposure"]
+    # Kz interpolation curve with each element highlighted.
     kz_curve = {
         "heights": list(TABLE_3_1_HEIGHTS),
-        "kz": [TABLE_3_1[h][exp] for h in TABLE_3_1_HEIGHTS],
-        "tip_h_ft": round(v["H_ft"], 3),
-        "tip_kz": round(v["Kz"], 4),
-        "exposure": exp,
+        "kz": [TABLE_3_1[h][exposure] for h in TABLE_3_1_HEIGHTS],
+        "exposure": exposure,
+        "points": [{"label": e["label"], "h_ft": round(e["h_ft"], 3),
+                    "kz": round(e["Kz"], 4)} for e in elements],
     }
 
-    # --- Figure 3: elevation schematic (rectangles, in metres) ---
-    plinth_w = v["plinth_width_m"] if v["include_plinth"] else 0.0
-    plinth_h = v["plinth_height_m"] if v["include_plinth"] else 0.0
-    body_w = v["WX_m"]
-    body_h = v["H_m"]            # H is overall tip height above NGL
-    # Body sits above the plinth; widths centred on x = 0.
-    schematic = {
-        "body": {
-            "x0": -body_w / 2.0, "x1": body_w / 2.0,
-            "y0": plinth_h, "y1": body_h,
-        },
-        "plinth": {
-            "x0": -plinth_w / 2.0, "x1": plinth_w / 2.0,
-            "y0": 0.0, "y1": plinth_h,
-        } if v["include_plinth"] else None,
-        "H_m": round(body_h, 3),
-        "body_w_m": round(body_w, 3),
-        "plinth_w_m": round(plinth_w, 3),
-        "plinth_h_m": round(plinth_h, 3),
-        "shape": v["shape"],
-        "tag": v["tag"],
-    }
-
-    return {
-        "force_breakdown": force_breakdown,
-        "kz_curve": kz_curve,
-        "schematic": schematic,
-    }
+    return {"stack": {"elements": stack, "z_max": round(z_max, 3),
+                      "w_max": round(w_max, 3)},
+            "force_breakdown": force_breakdown, "kz_curve": kz_curve}
 
 
 # ---------------------------------------------------------------------------
 # Worked-example presets (also surfaced in the UI)
 # ---------------------------------------------------------------------------
+def _plinth(kz_height_mm, label="Plinth"):
+    # In the project's single-item PI/CT/CB sheets the base plinth was evaluated
+    # at the governing equipment height, so Kz uses a custom reference height.
+    return {"label": label, "kind": "pedestal_plinth", "z_base_mm": 0,
+            "width_mm": 700, "height_mm": 200, "cf": 2.0,
+            "kz_basis": "custom", "kz_height_mm": kz_height_mm,
+            "grf_type": "rigid"}
+
+
 PRESETS = {
     "PI": {
-        "label": "Preset 1 - Post Insulator (PI), circular",
-        "tag": "PI", "V_kph": 310, "shape": "circular", "H_mm": 9189,
-        "D_mm": 345, "weight_kg": 505, "include_plinth": True,
-        "plinth_height_mm": 200, "plinth_width_mm": 700,
-        "IFW": 1.15, "exposure": "C", "grf_type": "rigid",
-        "cf_body": 0.9, "cf_plinth": 2.0, "apply_075": False,
+        "label": "Preset 1 — Post Insulator (PI), circular + plinth",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "elements": [
+            {"label": "PI", "kind": "equipment_circular", "z_base_mm": 0,
+             "z_tip_mm": 9189, "D_mm": 345, "cf": 0.9,
+             "kz_basis": "tip", "grf_type": "rigid"},
+            _plinth(9189),
+        ],
     },
     "CT": {
-        "label": "Preset 2 - Current Transformer (CT), circular",
-        "tag": "CT", "V_kph": 310, "shape": "circular", "H_mm": 10265,
-        "D_mm": 440, "weight_kg": 980, "include_plinth": True,
-        "plinth_height_mm": 200, "plinth_width_mm": 700,
-        "IFW": 1.15, "exposure": "C", "grf_type": "rigid",
-        "cf_body": 0.9, "cf_plinth": 2.0, "apply_075": False,
+        "label": "Preset 2 — Current Transformer (CT), circular + plinth",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "elements": [
+            {"label": "CT", "kind": "equipment_circular", "z_base_mm": 0,
+             "z_tip_mm": 10265, "D_mm": 440, "cf": 0.9,
+             "kz_basis": "tip", "grf_type": "rigid"},
+            _plinth(10265),
+        ],
     },
     "CB": {
-        "label": "Preset 3 - Circuit Breaker (CB), rectangular",
-        "tag": "CB", "V_kph": 310, "shape": "rectangular", "H_mm": 9336,
-        "WX_mm": 2853.8, "WY_mm": 2353.1, "weight_kg": 3730,
-        "include_plinth": True, "plinth_height_mm": 200, "plinth_width_mm": 700,
-        "IFW": 1.15, "exposure": "C", "grf_type": "rigid",
-        "cf_body": 2.0, "cf_plinth": 2.0, "apply_075": False,
+        "label": "Preset 3 — Circuit Breaker (CB), rectangular + plinth",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "elements": [
+            {"label": "CB", "kind": "equipment_rectangular", "z_base_mm": 0,
+             "z_tip_mm": 9336, "WX_mm": 2853.8, "WY_mm": 2353.1, "cf": 2.0,
+             "kz_basis": "tip", "grf_type": "rigid"},
+            _plinth(9336),
+        ],
+    },
+    "PI_STACK": {
+        "label": "Preset 4 — PI on a 2 m lattice support (stacked)",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "elements": [
+            {"label": "PI", "kind": "equipment_circular", "z_base_mm": 2000,
+             "z_tip_mm": 9189, "D_mm": 345, "cf": 0.9,
+             "kz_basis": "tip", "grf_type": "rigid"},
+            {"label": "Steel support", "kind": "lattice_truss", "route": "A",
+             "z_base_mm": 0, "face_width_mm": 500, "face_height_mm": 2000,
+             "L_mm": 2000, "phi": 0.20, "cross_section": "square",
+             "member_type": "flat", "yawed_wind": False,
+             "kz_basis": "tip", "grf_type": "rigid"},
+        ],
     },
 }
