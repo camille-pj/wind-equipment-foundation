@@ -29,6 +29,8 @@ createApp({
 
   data() {
     return {
+      activeTab: 'wind',
+      // --- wind ---
       tables: window.MOP113_TABLES,
       presets: window.MOP113_PRESETS,
       f: clone(window.MOP113_PRESETS.PI_STACK),  // start on the stacked preset
@@ -36,16 +38,39 @@ createApp({
       error: null,
       loading: false,
       _timer: null,
+      // --- seismic ---
+      seismicTables: window.MOP113_SEISMIC_TABLES,
+      seismicPresets: window.MOP113_SEISMIC_PRESETS,
+      s: clone(window.MOP113_SEISMIC_PRESETS.S1),
+      sresult: null,
+      serror: null,
+      sloading: false,
+      _stimer: null,
     };
   },
 
   watch: {
     f: { handler() { this.scheduleCompute(); }, deep: true },
+    s: { handler() { this.scheduleSeismic(); }, deep: true },
   },
 
-  mounted() { this.compute(); },
+  mounted() { this.compute(); this.computeSeismic(); },
 
   methods: {
+    /* ---------- tab switching ---------- */
+    switchTab(tab) {
+      this.activeTab = tab;
+      // Re-typeset + resize the now-visible tab's figures (they may have been
+      // laid out at zero width while the pane was display:none).
+      this.$nextTick(() => {
+        this.typeset();
+        const refs = tab === 'wind'
+          ? [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz]
+          : [this.$refs.figSpectrum, this.$refs.figSeisForce];
+        refs.forEach(el => el && window.Plotly && Plotly.Plots.resize(el));
+      });
+    },
+
     /* ---------- labels ---------- */
     kindLabel(k) { return KIND_LABELS[k] || k; },
     presetTag(key) { return key.replace('_STACK', '+stack'); },
@@ -226,10 +251,87 @@ createApp({
       Plotly.react(this.$refs.figKz, traces, layout, { responsive: true, displaylogo: false });
     },
 
-    /* ---------- print ---------- */
+    /* ================= SEISMIC ================= */
+    loadSeismicPreset(key) { this.s = clone(this.seismicPresets[key]); },
+
+    scheduleSeismic() {
+      this.sloading = true;
+      clearTimeout(this._stimer);
+      this._stimer = setTimeout(() => this.computeSeismic(), 250);
+    },
+
+    async computeSeismic() {
+      this.sloading = true;
+      try {
+        const resp = await fetch('/api/seismic', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.s),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { this.serror = data.error || 'Calculation error.'; }
+        else {
+          this.serror = null;
+          this.sresult = data;
+          await this.$nextTick();
+          this.typeset();
+          this.drawSeismicFigures();
+        }
+      } catch (e) {
+        this.serror = 'Could not reach the seismic API: ' + e.message;
+      } finally { this.sloading = false; }
+    },
+
+    drawSeismicFigures() {
+      const fig = this.sresult.figures;
+      this.drawSpectrum(fig.spectrum);
+      this.drawSeisForce(fig.force_bar);
+    },
+
+    drawSpectrum(sp) {
+      const traces = [
+        { x: sp.T, y: sp.Sa, mode: 'lines', name: 'Design spectrum',
+          line: { color: '#0d6efd', width: 2 } },
+        { x: [sp.struct_T], y: [sp.struct_Sa], mode: 'markers',
+          name: 'Structure (T, Sₐ)',
+          marker: { color: '#dc3545', size: 14, symbol: 'star' } },
+      ];
+      const layout = {
+        title: { text: `Design response spectrum — S<sub>DS</sub>=${sp.SDS.toFixed(3)} g, ` +
+                       `T₀=${sp.T0.toFixed(3)} s`, font: { size: 13 } },
+        xaxis: { title: 'Period T (s)' }, yaxis: { title: 'Sₐ (g)', rangemode: 'tozero' },
+        margin: { t: 40, r: 10, b: 50, l: 55 }, height: 340,
+        legend: { orientation: 'h', y: -0.25 },
+        shapes: [{ type: 'line', x0: sp.T0, x1: sp.T0, y0: 0, y1: sp.SDS,
+                   line: { color: '#6c757d', width: 1, dash: 'dot' } }],
+        annotations: [{ x: sp.T0, y: sp.SDS, text: `T₀=${sp.T0.toFixed(3)} s`,
+                        showarrow: true, arrowhead: 3, ax: 30, ay: -25, font: { size: 10 } },
+                      { x: sp.struct_T, y: sp.struct_Sa, ax: 35, ay: -35, arrowhead: 3,
+                        showarrow: true, font: { color: '#dc3545', size: 10 },
+                        text: `(${sp.struct_T.toFixed(2)}, ${sp.struct_Sa.toFixed(3)})` }],
+      };
+      Plotly.react(this.$refs.figSpectrum, traces, layout, { responsive: true, displaylogo: false });
+    },
+
+    drawSeisForce(fb) {
+      const traces = [{
+        x: fb.labels, y: fb.values, type: 'bar',
+        marker: { color: ['#dc3545', '#fd7e14'] },
+        text: fb.values.map(v => v.toFixed(2)), textposition: 'auto',
+      }];
+      const layout = {
+        title: { text: 'Seismic force (kN)', font: { size: 13 } },
+        yaxis: { title: 'Force (kN)' },
+        margin: { t: 40, r: 10, b: 40, l: 55 }, height: 340, showlegend: false,
+      };
+      Plotly.react(this.$refs.figSeisForce, traces, layout, { responsive: true, displaylogo: false });
+    },
+
+    /* ---------- print (active tab) ---------- */
     printReport() {
-      [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz]
-        .forEach(el => el && Plotly.Plots.resize(el));
+      const refs = this.activeTab === 'wind'
+        ? [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz]
+        : [this.$refs.figSpectrum, this.$refs.figSeisForce];
+      refs.forEach(el => el && Plotly.Plots.resize(el));
       window.print();
     },
   },

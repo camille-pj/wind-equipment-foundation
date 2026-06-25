@@ -14,6 +14,12 @@ from wind_mop113 import (
     TABLE_3_4A, TABLE_3_4B, TABLE_3_7, TABLE_3_8_ROWS, TABLE_3_9,
     TABLE_3_10_ROWS,
 )
+from seismic_mop113 import (
+    calculate_seismic, PRESETS as SEISMIC_PRESETS,
+    FA_SS_ANCHORS, TABLE_3_12, FV_S1_ANCHORS, TABLE_3_13,
+    R_TABLE, IFE_TABLE, IMV_TABLE,
+    SITE_F_WARNING, R_GT3_NOTE, HAZARD_NOTE,
+)
 
 app = Flask(__name__)
 
@@ -34,7 +40,18 @@ def index():
         "t310": TABLE_3_10_ROWS,
         "q_si": Q_SI, "q_us": Q_US, "note": DUAL_CONSTANT_NOTE,
     }
-    return render_template("index.html", tables=tables, presets=PRESETS)
+    seismic_tables = {
+        "t312": {"anchors": FA_SS_ANCHORS,
+                 "rows": {k: v for k, v in TABLE_3_12.items()}},
+        "t313": {"anchors": FV_S1_ANCHORS,
+                 "rows": {k: v for k, v in TABLE_3_13.items()}},
+        "rtable": R_TABLE, "ife": IFE_TABLE, "imv": IMV_TABLE,
+        "site_f_warning": SITE_F_WARNING, "r_gt3": R_GT3_NOTE,
+        "hazard_note": HAZARD_NOTE,
+    }
+    return render_template("index.html", tables=tables, presets=PRESETS,
+                           seismic_tables=seismic_tables,
+                           seismic_presets=SEISMIC_PRESETS)
 
 
 def _num(val):
@@ -102,6 +119,41 @@ def api_calculate():
         return jsonify({"error": err}), 400
     try:
         result = calculate(data)
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"error": f"Calculation failed: {exc}"}), 400
+    return jsonify(result)
+
+
+def _validate_seismic(data):
+    """Return an error string, or None if the seismic payload is usable."""
+    if not isinstance(data, dict):
+        return "Request body must be a JSON object."
+    for key in ("Ss", "S1", "T", "W_kN", "IFE"):
+        if _num(data.get(key)) is None:
+            return f"Seismic '{key}' must be a number."
+    if _num(data.get("Ss")) < 0 or _num(data.get("S1")) < 0:
+        return "Ss and S1 must be non-negative (g)."
+    if _num(data.get("T")) <= 0:
+        return "Period T must be positive."
+    if _num(data.get("W_kN")) <= 0:
+        return "Dead load W must be positive."
+    if str(data.get("site_class", "D")).upper() == "F":
+        for k in ("Fa_manual", "Fv_manual"):
+            if _num(data.get(k)) is None or _num(data.get(k)) <= 0:
+                return ("Site Class F requires manual Fa and Fv (positive "
+                        "numbers) — see the FEMA 450 note.")
+    return None
+
+
+@app.route("/api/seismic", methods=["POST"])
+def api_seismic():
+    """Validate the posted seismic inputs and return the full result."""
+    data = request.get_json(silent=True)
+    err = _validate_seismic(data)
+    if err:
+        return jsonify({"error": err}), 400
+    try:
+        result = calculate_seismic(data)
     except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"error": f"Calculation failed: {exc}"}), 400
     return jsonify(result)

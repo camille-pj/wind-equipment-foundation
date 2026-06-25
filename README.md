@@ -1,9 +1,17 @@
-# Wind Equipment Foundation — MOP 113 Stacked Wind Load Calculator
+# MOP 113 Load Calculator — Wind & Seismic
 
-A local web app that computes the wind load on a **stacked substation assembly** — main
-equipment seated on a steel lattice support seated on a foundation (plus an optional
-pedestal/plinth) — following **ASCE MOP 113 (2007)**, *Substation Structure Design Guide*,
-governing equation **Eq. 3-1** in its **SI-native** form.
+A local web app with two tabs, both following **ASCE MOP 113 (2007)**, *Substation Structure
+Design Guide*:
+
+- **Wind (Eq. 3-1)** — wind load on a **stacked substation assembly** (main equipment on a steel
+  lattice support on a foundation, + optional plinth), computed **SI-native**.
+- **Seismic (Eq. 3-10)** — simplified NEHRP/FEMA 450 equivalent-lateral-force seismic design per
+  **Section 3.1.7** (ASCE 7 spectral framework).
+
+Both tabs share the same stack (pure-Python engine = source of truth, Flask API, Vue 3 reactive
+form, MathJax report, Plotly figures) and switch via Bootstrap `nav-tabs`, each preserving its own state.
+
+## Wind tab — Eq. 3-1 (SI form)
 
 ```
 F = Q · Kz · V² · IFW · GRF · Cf · A        (Q = 0.613, V in m/s, A in m²)
@@ -77,20 +85,44 @@ pytest -v
 Presets 1–3 are single-equipment + plinth stacks from the project sheets; their US-derived targets
 are matched within ~0.1% by the SI-native engine. Preset 4 is a two-element stacking sanity check.
 
+## Seismic tab — Section 3.1.7 (NEHRP/FEMA 450 ELF)
+
+```
+SDS = (2/3)·Fa·Ss   (3-6)      Sa = SDS            if T ≤ T0   (3-8)
+SD1 = (2/3)·Fv·S1   (3-7)      Sa = SD1/T          if T > T0   (3-9)
+FE  = (Sa/R)·W_eff·IFE·IMV     (3-10)              T0 = SD1/SDS
+```
+
+- `Ss`, `S1` are the 0.2-s / 1.0-s spectral accelerations (g) from a **site-specific PSHA**
+  (NSCP 2015 §208 is UBC-97-based and does *not* produce Ss/S1 — a separate method).
+- `Fa`, `Fv` are interpolated from site class + Ss/S1 (Tables 3-12, 3-13); Site Class F requires
+  manual values (site-specific study). `R` follows the USD/ASD basis (Sec 3.1.7.3).
+- `W_eff = W + 0.5·(attached wire weight)`. `Sa` is used as a seismic coefficient (fraction of g),
+  so `FE` comes out in kN directly — no conversion to m/s².
+- Vertical component: `a_vert = 0.8·Sa` (g); informational force `FE_vert = 0.8·Sa·W_eff·IFE`
+  **without** the R reduction (R is a lateral-ductility factor — deliberately *not* `0.8·FE`).
+
+| Preset | Branch | Fa | Fv | SDS (g) | Sa (g) | FE (kN) |
+|---|---|---|---|---|---|---|
+| S1 | plateau (T ≤ T0) | 1.0 | 1.5 | 1.000 | 1.000 | **8.333** |
+| S2 | descending (T > T0) | 1.0 | 1.5 | 1.000 | 0.600 | **5.000** |
+| S3 | interpolation check | 1.30 | 1.90 | 0.542 | 0.542 | **2.708** |
+
 ## Project layout
 
 ```
 .
-├── app.py                 # Flask: serves index, exposes /api/calculate
-├── wind_mop113.py         # Pure-Python SI-native MOP 113 engine (tables, lookups, stacked calc)
-├── test_wind_mop113.py    # pytest: validates the 4 worked presets + table logic
+├── app.py                  # Flask: serves index, exposes /api/calculate + /api/seismic
+├── wind_mop113.py          # Pure-Python SI-native wind engine (tables, lookups, stacked calc)
+├── seismic_mop113.py       # Pure-Python seismic engine (§3.1.7 ELF, Tables 3-12/3-13, R/IFE/IMV)
+├── test_wind_mop113.py     # pytest: 4 wind presets + table logic
+├── test_seismic_mop113.py  # pytest: 3 seismic presets + table logic
 ├── requirements.txt
-├── templates/index.html   # Bootstrap + Vue 3 + MathJax + Plotly (CDN)
-└── static/app.js          # Vue app (global params + element stack, API, MathJax, Plotly)
+├── templates/index.html    # nav-tabs shell + Wind & Seismic panes (Bootstrap/Vue/MathJax/Plotly)
+└── static/app.js           # Vue app: both tabs' state, APIs, MathJax, Plotly
 ```
 
 ---
 
-*Calculation per ASCE MOP 113 (2007), Eq. 3-1 (SI form). The basic wind speed is the 3-s gust
-wind speed (§3.1.5.3) from the governing project specification. Verify all table-driven selections
-against the governing project specification.*
+*Calculation per ASCE MOP 113 (2007): Wind Eq. 3-1 (SI form) and Seismic §3.1.7 (Eq. 3-10).
+Verify all table-driven selections against the governing project specification.*

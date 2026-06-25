@@ -48,12 +48,26 @@
 <div id="app">
   <nav class="navbar navbar-dark bg-dark mb-3 no-print">
     <div class="container-fluid">
-      <span class="navbar-brand mb-0 h1">⚡ MOP 113 Stacked Wind Load</span>
-      <span class="text-light small">ASCE MOP 113 (2007) — Eq. 3-1 (SI form)</span>
+      <span class="navbar-brand mb-0 h1">⚡ MOP 113 Load Calculator</span>
+      <span class="text-light small">ASCE MOP 113 (2007) — Wind (Eq. 3-1) &amp; Seismic (Eq. 3-10)</span>
     </div>
   </nav>
 
   <div class="container-fluid px-3 px-lg-4">
+    <!-- ===== TAB NAV ===== -->
+    <ul class="nav nav-tabs mb-3 no-print">
+      <li class="nav-item">
+        <a class="nav-link" :class="{active: activeTab==='wind'}" href="#" @click.prevent="switchTab('wind')">Wind (Eq. 3-1)</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" :class="{active: activeTab==='seismic'}" href="#" @click.prevent="switchTab('seismic')">Seismic (Eq. 3-10)</a>
+      </li>
+    </ul>
+
+    <!-- ============================================================ -->
+    <!-- ===================== WIND TAB PANE ======================== -->
+    <!-- ============================================================ -->
+    <div v-show="activeTab==='wind'">
     <div class="alert alert-secondary py-2 small mb-2">
       <strong>Calculation per ASCE MOP 113 (2007), Eq. 3-1 (SI form).</strong>
       The basic wind speed is the 3-s gust wind speed (§3.1.5.3) from the governing project
@@ -449,9 +463,241 @@
         </div>
       </div>
     </div>
+    </div><!-- /wind pane -->
+
+    <!-- ============================================================ -->
+    <!-- ==================== SEISMIC TAB PANE ====================== -->
+    <!-- ============================================================ -->
+    <div v-show="activeTab==='seismic'">
+      <div class="alert alert-secondary py-2 small-note mb-3">
+        <strong>Seismic design per ASCE MOP 113 (2007) Section 3.1.7</strong> — simplified
+        NEHRP/FEMA 450 equivalent lateral force (ASCE 7 spectral framework). Complements IEEE 693
+        (2005) for equipment qualification. S<sub>s</sub> and S<sub>1</sub> are the 0.2-s and 1.0-s
+        spectral accelerations from a site-specific PSHA / seismic hazard study; NSCP 2015 §208
+        (UBC-97: Z, Ca, Cv) is a separate code-based method and its coefficients are not S<sub>s</sub>/S<sub>1</sub>.
+      </div>
+
+      <div class="row g-4">
+        <!-- ===== LEFT: SEISMIC INPUTS ===== -->
+        <div class="col-lg-5">
+          <div class="card mb-3">
+            <div class="card-body py-2 d-flex gap-2 flex-wrap align-items-center">
+              <span class="fw-bold me-1">Load example:</span>
+              <button v-for="(p,key) in seismicPresets" :key="key" class="btn btn-sm btn-outline-primary"
+                      @click="loadSeismicPreset(key)" :title="p.label">[[ key ]]</button>
+            </div>
+          </div>
+
+          <!-- Section A -->
+          <div class="card mb-3">
+            <div class="card-header fw-bold bg-primary text-white py-2">Section A — Direct inputs</div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label class="form-label">Structure / item tag</label>
+                <input class="form-control" v-model="s.tag">
+              </div>
+
+              <div class="row g-2 mb-1">
+                <div class="col-6">
+                  <label class="form-label">S<sub>s</sub> (g)</label>
+                  <input type="number" step="0.01" class="form-control" v-model.number="s.Ss">
+                </div>
+                <div class="col-6">
+                  <label class="form-label">S<sub>1</sub> (g)</label>
+                  <input type="number" step="0.01" class="form-control" v-model.number="s.S1">
+                </div>
+              </div>
+              <div class="form-text ref-cap mb-2">0.2-s &amp; 1.0-s spectral accelerations — site-specific PSHA
+                <a class="ref-link text-decoration-none ms-1" data-bs-toggle="collapse" href="#sRefHaz">[show reference]</a>
+                <div class="collapse mt-1" id="sRefHaz"><div class="border rounded p-2 bg-light small-note">[[ seismicTables.hazard_note ]]</div></div>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label">Structure period T (s)</label>
+                <input type="number" step="0.01" class="form-control" v-model.number="s.T">
+                <div class="form-text ref-cap">From modal/eigenvalue analysis (Sec 5.5.3)</div>
+              </div>
+
+              <div class="row g-2 mb-2">
+                <div class="col-6">
+                  <label class="form-label">Dead load W (kN)</label>
+                  <input type="number" class="form-control" v-model.number="s.W_kN">
+                  <div class="form-text ref-cap small-note">incl. rigidly attached equipment (kg → kN: ×9.80665/1000)</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label">Attached wire weight (kN)</label>
+                  <input type="number" class="form-control" v-model.number="s.wire_kN">
+                  <div class="form-text ref-cap small-note">50% added to W (Eq. 3-10)
+                    <span v-if="sresult">→ W<sub>eff</sub> = [[ sresult.inputs_echo.W_eff.toFixed(2) ]] kN</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section B -->
+          <div class="card mb-3">
+            <div class="card-header fw-bold bg-success text-white py-2">Section B — Table-driven inputs</div>
+            <div class="card-body">
+              <!-- Site class -->
+              <div class="mb-3">
+                <label class="form-label">Site class</label>
+                <select class="form-select" v-model="s.site_class">
+                  <option v-for="c in ['A','B','C','D','E','F']" :key="c" :value="c">[[ c ]]</option>
+                </select>
+                <div class="form-text ref-cap">Tables 3-12 &amp; 3-13
+                  <a class="ref-link text-decoration-none ms-1" data-bs-toggle="collapse" href="#sRefSite">[show tables]</a></div>
+                <div v-if="s.site_class==='F'" class="alert alert-warning small-note py-2 mt-2 mb-0">⚠ [[ seismicTables.site_f_warning ]]</div>
+                <div class="row g-2 mt-1" v-if="s.site_class==='F'">
+                  <div class="col-6"><label class="form-label">F<sub>a</sub> (manual)</label>
+                    <input type="number" step="0.1" class="form-control form-control-sm" v-model.number="s.Fa_manual"></div>
+                  <div class="col-6"><label class="form-label">F<sub>v</sub> (manual)</label>
+                    <input type="number" step="0.1" class="form-control form-control-sm" v-model.number="s.Fv_manual"></div>
+                </div>
+                <div class="collapse mt-1" id="sRefSite">
+                  <div class="small-note fw-semibold">Table 3-12 — F<sub>a</sub> (interp on S<sub>s</sub>)</div>
+                  <table class="table table-sm table-bordered table-peek bg-white mb-2">
+                    <thead><tr><th>Class</th><th v-for="a in seismicTables.t312.anchors" :key="a">[[ a.toFixed(2) ]]</th></tr></thead>
+                    <tbody><tr v-for="(vals,cls) in seismicTables.t312.rows" :key="cls" :class="{'hl-row':s.site_class===cls}">
+                      <td>[[ cls ]]</td><template v-if="vals"><td v-for="(v,i) in vals" :key="i">[[ v.toFixed(1) ]]</td></template>
+                      <td v-else colspan="5">site-specific</td></tr></tbody>
+                  </table>
+                  <div class="small-note fw-semibold">Table 3-13 — F<sub>v</sub> (interp on S<sub>1</sub>)</div>
+                  <table class="table table-sm table-bordered table-peek bg-white mb-0">
+                    <thead><tr><th>Class</th><th v-for="a in seismicTables.t313.anchors" :key="a">[[ a.toFixed(1) ]]</th></tr></thead>
+                    <tbody><tr v-for="(vals,cls) in seismicTables.t313.rows" :key="cls" :class="{'hl-row':s.site_class===cls}">
+                      <td>[[ cls ]]</td><template v-if="vals"><td v-for="(v,i) in vals" :key="i">[[ v.toFixed(1) ]]</td></template>
+                      <td v-else colspan="5">site-specific</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Derived Fa/Fv display -->
+              <div class="alert alert-light border small-note py-2 mb-3" v-if="sresult && s.site_class!=='F'">
+                <strong>Derived:</strong> F<sub>a</sub> = [[ sresult.fa.value.toFixed(3) ]] (Table 3-12),
+                F<sub>v</sub> = [[ sresult.fv.value.toFixed(3) ]] (Table 3-13) — interpolation shown in report.
+              </div>
+
+              <!-- Design basis -->
+              <div class="mb-3">
+                <label class="form-label">Design basis (Sec 3.1.7.3)</label>
+                <select class="form-select" v-model="s.design_basis">
+                  <option value="USD">USD (ultimate strength)</option>
+                  <option value="ASD">ASD (allowable stress)</option>
+                </select>
+                <div class="form-text ref-cap small-note">Pair the R basis with the matching load combinations (USD↔strength, ASD↔allowable-stress).</div>
+              </div>
+
+              <!-- R -->
+              <div class="mb-3">
+                <label class="form-label">Response modification factor R</label>
+                <select class="form-select" v-model="s.r_type">
+                  <option v-for="(r,i) in seismicTables.rtable" :key="i" :value="r.type">
+                    [[ r.type ]] → [[ s.design_basis==='USD' ? r.usd.toFixed(1) : r.asd.toFixed(1) ]]</option>
+                </select>
+                <div class="form-text ref-cap">Sec 3.1.7.3 — R follows the USD/ASD basis
+                  <span v-if="sresult">→ R = <strong>[[ sresult.inputs_echo.R.toFixed(2) ]]</strong></span>
+                  <a class="ref-link text-decoration-none ms-1" data-bs-toggle="collapse" href="#sRefR">[show table]</a></div>
+                <div class="collapse mt-1" id="sRefR">
+                  <table class="table table-sm table-bordered table-peek bg-white mb-1">
+                    <thead><tr><th>Structure type</th><th :class="{'hl-row':s.design_basis==='USD'}">R (USD)</th><th :class="{'hl-row':s.design_basis==='ASD'}">R (ASD)</th></tr></thead>
+                    <tbody><tr v-for="(r,i) in seismicTables.rtable" :key="i" :class="{'hl-row':s.r_type===r.type}">
+                      <td>[[ r.type ]]</td><td>[[ r.usd.toFixed(1) ]]</td><td>[[ r.asd.toFixed(1) ]]</td></tr></tbody>
+                  </table>
+                  <div class="small-note alert alert-light border py-1 mb-0">[[ seismicTables.r_gt3 ]]</div>
+                </div>
+              </div>
+
+              <!-- IFE -->
+              <div class="mb-3">
+                <label class="form-label">Earthquake importance factor I<sub>FE</sub></label>
+                <select class="form-select" v-model.number="s.IFE">
+                  <option v-for="(r,i) in seismicTables.ife" :key="i" :value="r.ife">[[ r.category ]] → [[ r.ife.toFixed(2) ]]</option>
+                </select>
+                <div class="form-text ref-cap">Sec 3.1.7.2
+                  <a class="ref-link text-decoration-none ms-1" data-bs-toggle="collapse" href="#sRefIfe">[show table]</a></div>
+                <div class="collapse mt-1" id="sRefIfe">
+                  <table class="table table-sm table-bordered table-peek bg-white mb-0">
+                    <thead><tr><th>Category</th><th>I<sub>FE</sub></th></tr></thead>
+                    <tbody><tr v-for="(r,i) in seismicTables.ife" :key="i" :class="{'hl-row':s.IFE===r.ife}"><td>[[ r.category ]]</td><td>[[ r.ife.toFixed(2) ]]</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- IMV -->
+              <div class="mb-2">
+                <label class="form-label">Multi-mode factor I<sub>MV</sub></label>
+                <select class="form-select" v-model.number="s.IMV">
+                  <option v-for="(r,i) in seismicTables.imv" :key="i" :value="r.imv">[[ r.label ]] → [[ r.imv.toFixed(1) ]]</option>
+                </select>
+                <div class="form-text ref-cap">Eq. 3-10 — 1.0 single dominant mode, 1.5 if multiple modes considered</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== RIGHT: SEISMIC REPORT + FIGURES ===== -->
+        <div class="col-lg-7">
+          <div class="sticky-col">
+            <div class="d-flex justify-content-between align-items-center mb-2 no-print">
+              <h4 class="mb-0">Seismic report</h4>
+              <div>
+                <span v-if="sloading" class="spinner-border spinner-border-sm text-primary me-2"></span>
+                <button class="btn btn-sm btn-dark" @click="printReport">🖨 Print / Export PDF</button>
+              </div>
+            </div>
+
+            <div v-if="serror" class="alert alert-danger">[[ serror ]]</div>
+
+            <!-- Summary -->
+            <div class="card summary-card mb-3" v-if="sresult">
+              <div class="card-header fw-bold py-2">Summary — [[ sresult.inputs_echo.tag ]]</div>
+              <div class="card-body">
+                <div class="row text-center g-2 mb-3">
+                  <div class="col"><div class="text-muted small">S<sub>DS</sub></div><div class="val">[[ sresult.summary.SDS_g.toFixed(3) ]]</div><div class="small">g</div></div>
+                  <div class="col"><div class="text-muted small">S<sub>D1</sub></div><div class="val">[[ sresult.summary.SD1_g.toFixed(3) ]]</div><div class="small">g</div></div>
+                  <div class="col"><div class="text-muted small">S<sub>a</sub></div><div class="val text-primary">[[ sresult.summary.Sa_g.toFixed(3) ]]</div><div class="small">g ([[ sresult.summary.branch ]])</div></div>
+                </div>
+                <div class="row text-center g-2">
+                  <div class="col"><div class="text-muted small">F<sub>E</sub> horizontal</div><div class="val text-danger">[[ sresult.summary.FE_kN.toFixed(3) ]]</div><div class="small">kN</div></div>
+                  <div class="col"><div class="text-muted small">F<sub>E</sub> vertical est.</div><div class="val">[[ sresult.summary.FE_vert_kN.toFixed(3) ]]</div><div class="small">kN</div></div>
+                  <div class="col"><div class="text-muted small">a<sub>vert</sub></div><div class="val">[[ sresult.summary.a_vert_g.toFixed(3) ]]</div><div class="small">g</div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Figures -->
+            <div class="card mb-3" v-if="sresult">
+              <div class="card-header fw-bold py-2">Figures</div>
+              <div class="card-body">
+                <div class="small text-muted fw-semibold mb-1">1 — Design response spectrum (S<sub>a</sub> vs T)</div>
+                <div ref="figSpectrum" class="figure-box"></div><hr>
+                <div class="small text-muted fw-semibold mb-1">2 — Seismic force: horizontal vs vertical estimate (kN)</div>
+                <div ref="figSeisForce" class="figure-box"></div>
+              </div>
+            </div>
+
+            <!-- Report -->
+            <div class="card mb-3" v-if="sresult">
+              <div class="card-header fw-bold py-2">Step-by-step report</div>
+              <div class="card-body" ref="sreport">
+                <div v-for="step in sresult.steps" :key="step.n" class="report-step">
+                  <h6>Step [[ step.n ]] — <span v-html="step.title"></span></h6>
+                  <div v-for="(line,i) in step.lines" :key="i" class="mjx-line">$$ [[ line ]] $$</div>
+                </div>
+                <div class="alert alert-light border small-note mb-0">
+                  <div>• [[ sresult.notes.gravity_friction ]]</div>
+                  <div>• [[ sresult.notes.no_combination ]]</div>
+                  <div>• [[ sresult.notes.vertical ]]</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /seismic pane -->
 
     <footer class="text-center text-muted small my-4">
-      Engine: <code>wind_mop113.py</code> (pure Python, SI-native, source of truth) ·
+      Engine: <code>wind_mop113.py</code> + <code>seismic_mop113.py</code> (pure Python, source of truth) ·
       ASCE MOP 113 (2007) Substation Structure Design Guide
     </footer>
   </div>
@@ -460,6 +706,8 @@
 <script>
   window.MOP113_TABLES  = {{ tables | tojson }};
   window.MOP113_PRESETS = {{ presets | tojson }};
+  window.MOP113_SEISMIC_TABLES  = {{ seismic_tables | tojson }};
+  window.MOP113_SEISMIC_PRESETS = {{ seismic_presets | tojson }};
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
