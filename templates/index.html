@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MOP 113 Wind Load Calculator</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- MathJax 3 -->
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [['$', '$'], ['\\(', '\\)']],
+             displayMath: [['$$', '$$'], ['\\[', '\\]']] },
+      svg: { fontCache: 'global' },
+      startup: { typeset: false }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" id="MathJax-script" async></script>
+
+  <!-- Plotly.js -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+
+  <!-- Vue 3 (global build) -->
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+
+  <style>
+    body { background: #f5f6f8; }
+    .ref-cap { font-style: italic; }
+    .report-step { border-left: 3px solid #0d6efd; padding-left: .9rem; margin-bottom: 1.4rem; }
+    .report-step h6 { font-weight: 600; }
+    .mjx-line { margin: .35rem 0; overflow-x: auto; }
+    .summary-card .val { font-size: 1.35rem; font-weight: 700; }
+    .table-peek { font-size: .8rem; }
+    .table-peek td, .table-peek th { padding: .25rem .45rem; }
+    .sticky-col { position: sticky; top: 1rem; }
+    .figure-box { min-height: 360px; }
+    .form-label { font-weight: 600; margin-bottom: .15rem; }
+    .hl-row { background: #fff3cd !important; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff; }
+      .col-lg-5, .col-lg-7 { width: 100% !important; max-width: 100% !important; flex: 0 0 100% !important; }
+      .sticky-col { position: static; }
+      .card { break-inside: avoid; }
+      .report-step { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <nav class="navbar navbar-dark bg-dark mb-3 no-print">
+    <div class="container-fluid">
+      <span class="navbar-brand mb-0 h1">⚡ MOP 113 Wind Load Calculator</span>
+      <span class="text-light small">ASCE MOP 113 (2007) — Eq. 3-1</span>
+    </div>
+  </nav>
+
+  <div class="container-fluid px-3 px-lg-4">
+    <div class="alert alert-secondary py-2 small mb-3">
+      <strong>Calculation per ASCE MOP 113 (2007), Eq. 3-1.</strong>
+      Verify all table-driven selections against the governing project specification.
+      <span class="text-muted">&nbsp;$F = Q\,K_z\,V^2\,I_{FW}\,GRF\,C_f\,A$</span>
+    </div>
+
+    <div class="row g-4">
+      <!-- ============ LEFT: INPUT FORM ============ -->
+      <div class="col-lg-5 no-print-scroll">
+        <!-- Presets -->
+        <div class="card mb-3">
+          <div class="card-body py-2">
+            <label class="form-label mb-1">Load worked example</label>
+            <div class="d-flex gap-2 flex-wrap">
+              <button v-for="(p,key) in presets" :key="key"
+                      class="btn btn-sm btn-outline-primary"
+                      @click="loadPreset(key)">[[ p.tag ]]</button>
+              <span class="form-text ms-auto align-self-center">3 validated presets</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- SECTION A -->
+        <div class="card mb-3">
+          <div class="card-header fw-bold bg-primary text-white py-2">
+            Section A — Direct inputs <small class="fw-normal">(from drawings / project)</small>
+          </div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label">Equipment tag / name</label>
+              <input class="form-control" v-model="f.tag">
+              <div class="form-text ref-cap">Free label, e.g. "PI", "CT", "CB"</div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Basic wind speed V (kph)</label>
+              <input type="number" class="form-control" v-model.number="f.V_kph">
+              <div class="form-text ref-cap">Project / TDS — basic 3-s gust wind speed
+                <span v-if="result">→ [[ result.inputs_echo.V_mph.toFixed(2) ]] mph</span></div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Body shape</label>
+              <select class="form-select" v-model="f.shape" @change="onShapeChange">
+                <option value="circular">Circular</option>
+                <option value="rectangular">Rectangular</option>
+              </select>
+              <div class="form-text ref-cap">Drawing — governs area &amp; suggested C<sub>f</sub></div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Overall height H, from NGL (mm)</label>
+              <input type="number" class="form-control" v-model.number="f.H_mm">
+              <div class="form-text ref-cap">Drawing — tip height above natural ground level</div>
+            </div>
+
+            <div class="mb-3" v-if="f.shape==='circular'">
+              <label class="form-label">Diameter D (mm)</label>
+              <input type="number" class="form-control" v-model.number="f.D_mm">
+              <div class="form-text ref-cap">Drawing — max shed / body diameter.
+                Circular ⇒ W<sub>X</sub> = W<sub>Y</sub> = D × H.</div>
+            </div>
+
+            <div class="row" v-else>
+              <div class="col-6 mb-3">
+                <label class="form-label">Front-face width W<sub>X</sub> (mm)</label>
+                <input type="number" class="form-control" v-model.number="f.WX_mm">
+                <div class="form-text ref-cap">Drawing / TDS — projected width, front face</div>
+              </div>
+              <div class="col-6 mb-3">
+                <label class="form-label">Side-face width W<sub>Y</sub> (mm)</label>
+                <input type="number" class="form-control" v-model.number="f.WY_mm">
+                <div class="form-text ref-cap">Drawing / TDS — projected width, side face</div>
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Equipment weight (kg)</label>
+              <input type="number" class="form-control" v-model.number="f.weight_kg">
+              <div class="form-text ref-cap">Drawing / equipment list — display only as kN; not used in wind force
+                <span v-if="result">→ [[ result.inputs_echo.weight_kN.toFixed(3) ]] kN</span></div>
+            </div>
+
+            <hr>
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" id="incPlinth" v-model="f.include_plinth">
+              <label class="form-check-label fw-bold" for="incPlinth">Include plinth?</label>
+            </div>
+            <div class="row" v-if="f.include_plinth">
+              <div class="col-6 mb-3">
+                <label class="form-label">Plinth height (mm)</label>
+                <input type="number" class="form-control" v-model.number="f.plinth_height_mm">
+                <div class="form-text ref-cap">Project drawing</div>
+              </div>
+              <div class="col-6 mb-3">
+                <label class="form-label">Plinth width — square (mm)</label>
+                <input type="number" class="form-control" v-model.number="f.plinth_width_mm">
+                <div class="form-text ref-cap">Project drawing — square section both directions</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SECTION B -->
+        <div class="card mb-3">
+          <div class="card-header fw-bold bg-success text-white py-2">
+            Section B — Table-driven inputs <small class="fw-normal">(MOP 113 tables)</small>
+          </div>
+          <div class="card-body">
+
+            <!-- Q -->
+            <div class="mb-3">
+              <label class="form-label">Air density factor Q</label>
+              <input class="form-control" :value="qConst.toFixed(5) + '  lb/ft²/mph² (fixed)'" readonly disabled>
+              <div class="form-text ref-cap">MOP 113 Eq. 3-1 — fixed constant, not editable</div>
+            </div>
+
+            <!-- IFW -->
+            <div class="mb-3">
+              <label class="form-label">Importance factor I<sub>FW</sub> — <em>Table 3-3</em></label>
+              <select class="form-select" v-model.number="f.IFW">
+                <option v-for="(r,k) in tables.t33" :key="k" :value="r.ifw">
+                  [[ r.label ]] → [[ r.ifw.toFixed(2) ]]</option>
+              </select>
+              <a class="form-text ref-cap" data-bs-toggle="collapse" href="#tbl33" role="button">▸ view Table 3-3</a>
+              <div class="collapse" id="tbl33">
+                <table class="table table-sm table-bordered table-peek mt-1">
+                  <thead><tr><th>MRI</th><th>I<sub>FW</sub></th></tr></thead>
+                  <tbody><tr v-for="(r,k) in tables.t33" :key="k"><td>[[ r.label ]]</td><td>[[ r.ifw.toFixed(2) ]]</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Exposure -->
+            <div class="mb-3">
+              <label class="form-label">Exposure category — <em>Table 3-1 / 3-2</em></label>
+              <select class="form-select" v-model="f.exposure">
+                <option value="B">B</option><option value="C">C</option><option value="D">D</option>
+              </select>
+              <a class="form-text ref-cap" data-bs-toggle="collapse" href="#tbl31" role="button">▸ view Table 3-1 (K<sub>z</sub>)</a>
+              <div class="collapse" id="tbl31">
+                <table class="table table-sm table-bordered table-peek mt-1">
+                  <thead><tr><th>z (ft)</th><th>B</th><th>C</th><th>D</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(h,i) in tables.t31.heights" :key="h">
+                      <td>[[ i===0 ? '0–15' : h ]]</td>
+                      <td :class="{'hl-row': f.exposure==='B'}">[[ tables.t31.rows[h].B ]]</td>
+                      <td :class="{'hl-row': f.exposure==='C'}">[[ tables.t31.rows[h].C ]]</td>
+                      <td :class="{'hl-row': f.exposure==='D'}">[[ tables.t31.rows[h].D ]]</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- GRF -->
+            <div class="mb-3">
+              <label class="form-label">Gust response factor GRF — <em>Sec. 3.1.5.5</em></label>
+              <select class="form-select" v-model="f.grf_type">
+                <option value="rigid">Rigid, non-wire-supporting (≥1 Hz) → 0.85</option>
+                <option value="wire">Wire-supporting (ε = 0.75) → Table 3-4a</option>
+                <option value="flexible">Flexible, non-wire-supporting (&lt;1 Hz, ε = 1.0) → Table 3-4b</option>
+              </select>
+              <div class="form-text ref-cap" v-if="result">
+                Looked up: GRF = <strong>[[ result.grf.grf.toFixed(3) ]]</strong> — [[ result.grf.desc ]]<span v-if="result.grf.band">, band [[ result.grf.band ]]</span></div>
+              <a class="form-text ref-cap d-block" data-bs-toggle="collapse" href="#tbl34" role="button"
+                 v-if="f.grf_type!=='rigid'">▸ view Table [[ f.grf_type==='wire' ? '3-4a' : '3-4b' ]]</a>
+              <div class="collapse" id="tbl34" v-if="f.grf_type!=='rigid'">
+                <table class="table table-sm table-bordered table-peek mt-1">
+                  <thead><tr><th>Height (ft)</th><th>B</th><th>C</th><th>D</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(r,i) in (f.grf_type==='wire'?tables.t34a:tables.t34b)" :key="i">
+                      <td>≤[[ r.upper ]]</td>
+                      <td :class="{'hl-row': f.exposure==='B'}">[[ r.B ]]</td>
+                      <td :class="{'hl-row': f.exposure==='C'}">[[ r.C ]]</td>
+                      <td :class="{'hl-row': f.exposure==='D'}">[[ r.D ]]</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Cf body -->
+            <div class="mb-3">
+              <label class="form-label">Force coefficient — body C<sub>f</sub> — <em>Table 3-9</em></label>
+              <select class="form-select" v-model.number="f.cf_body">
+                <option v-for="(r,i) in tables.t39" :key="i" :value="r.cf">[[ r.shape ]] → [[ r.cf.toFixed(1) ]]</option>
+              </select>
+              <div class="form-text ref-cap">Auto-suggested from body shape; override allowed.</div>
+            </div>
+
+            <!-- Cf plinth -->
+            <div class="mb-3">
+              <label class="form-label">Force coefficient — plinth C<sub>f</sub> — <em>Table 3-9</em></label>
+              <select class="form-select" v-model.number="f.cf_plinth">
+                <option v-for="(r,i) in tables.t39" :key="i" :value="r.cf">[[ r.shape ]] → [[ r.cf.toFixed(1) ]]</option>
+              </select>
+              <a class="form-text ref-cap" data-bs-toggle="collapse" href="#tbl39" role="button">▸ view Table 3-9</a>
+              <div class="collapse" id="tbl39">
+                <table class="table table-sm table-bordered table-peek mt-1">
+                  <thead><tr><th>Member shape</th><th>C<sub>f</sub></th></tr></thead>
+                  <tbody><tr v-for="(r,i) in tables.t39" :key="i"><td>[[ r.shape ]]</td><td>[[ r.cf.toFixed(1) ]]</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Kz note -->
+            <div class="alert alert-light border small mb-3 py-2">
+              <strong>K<sub>z</sub> — Table 3-1 (derived, not an input).</strong>
+              Linear-interpolated from tip height in ft for the selected exposure.
+              <span v-if="result">→ K<sub>z</sub> = <strong>[[ result.kz.Kz.toFixed(4) ]]</strong> (h = [[ result.kz.H_ft.toFixed(2) ]] ft)</span>
+            </div>
+
+            <!-- 0.75 toggle -->
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="f075" v-model="f.apply_075">
+              <label class="form-check-label" for="f075">Apply 0.75 wind-on-two-faces factor <em>(off by default)</em></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ RIGHT: REPORT + FIGURES ============ -->
+      <div class="col-lg-7">
+        <div class="sticky-col">
+
+          <div class="d-flex justify-content-between align-items-center mb-2 no-print">
+            <h4 class="mb-0">Calculation report</h4>
+            <div>
+              <span v-if="loading" class="spinner-border spinner-border-sm text-primary me-2"></span>
+              <button class="btn btn-sm btn-dark" @click="printReport">🖨 Print / Export PDF</button>
+            </div>
+          </div>
+
+          <div v-if="error" class="alert alert-danger">[[ error ]]</div>
+
+          <!-- Summary card -->
+          <div class="card summary-card mb-3" v-if="result">
+            <div class="card-header fw-bold py-2">Summary — [[ result.inputs_echo.tag ]]</div>
+            <div class="card-body">
+              <div class="row text-center g-2">
+                <div class="col"><div class="text-muted small">q<sub>z</sub></div><div class="val text-primary">[[ result.summary.qz_kpa.toFixed(3) ]]</div><div class="small">kPa</div></div>
+                <div class="col"><div class="text-muted small">Total F<sub>X</sub></div><div class="val">[[ result.summary.FX_kN.toFixed(3) ]]</div><div class="small">kN</div></div>
+                <div class="col"><div class="text-muted small">Total F<sub>Y</sub></div><div class="val">[[ result.summary.FY_kN.toFixed(3) ]]</div><div class="small">kN</div></div>
+                <div class="col"><div class="text-muted small">Resultant F<sub>R</sub></div><div class="val text-danger">[[ result.summary.FR_kN.toFixed(3) ]]</div><div class="small">kN</div></div>
+                <div class="col"><div class="text-muted small">Governs</div><div class="val">[[ result.summary.governing ]]</div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- MathJax report -->
+          <div class="card mb-3" v-if="result">
+            <div class="card-body" ref="report">
+              <div v-for="step in result.steps" :key="step.n" class="report-step">
+                <h6>Step [[ step.n ]] — <span v-html="renderTitle(step.title)"></span></h6>
+                <div v-for="(line,i) in step.lines" :key="i" class="mjx-line">$$ [[ line ]] $$</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Figures -->
+          <div class="card mb-3" v-if="result">
+            <div class="card-header fw-bold py-2">Figures</div>
+            <div class="card-body">
+              <div class="mb-2 fw-semibold small text-muted">1 — Force breakdown (kN)</div>
+              <div ref="figForce" class="figure-box"></div>
+              <hr>
+              <div class="mb-2 fw-semibold small text-muted">2 — K<sub>z</sub> interpolation (Table 3-1)</div>
+              <div ref="figKz" class="figure-box"></div>
+              <hr>
+              <div class="mb-2 fw-semibold small text-muted">3 — Equipment elevation schematic</div>
+              <div ref="figSchematic" class="figure-box"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <footer class="text-center text-muted small my-4">
+      Computation engine: <code>wind_mop113.py</code> (pure Python, source of truth) ·
+      ASCE MOP 113 (2007) Substation Structure Design Guide
+    </footer>
+  </div>
+</div>
+
+<!-- inject server data -->
+<script>
+  window.MOP113_TABLES  = {{ tables | tojson }};
+  window.MOP113_PRESETS = {{ presets | tojson }};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
