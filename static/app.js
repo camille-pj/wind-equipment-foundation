@@ -618,19 +618,41 @@ createApp({
       if (!node) return;
 
       this.exporting = true;
-      // unclamp the sticky/scroll box so html2canvas sees the full content
+      // Lock the column's rendered width BEFORE unclamping the sticky/scroll box.
+      // Otherwise making it position:static collapses its width to ~0, the content
+      // reflows into a huge zero-width layout, and html2canvas returns a 0×N canvas
+      // (which then crashes drawImage). Fall back to the parent column / 720 px so
+      // the capture width is never zero.
+      let lockW = Math.round(node.getBoundingClientRect().width) || 0;
+      if (lockW < 200) lockW = Math.round((node.parentElement &&
+        node.parentElement.getBoundingClientRect().width) || 0);
+      if (lockW < 200) lockW = 720;   // last-resort width so capture is never degenerate
+      // Height-aware scale: keep the captured canvas under ~14000 px tall so a long
+      // report (e.g. a big stacked truss) can't exhaust memory / hit the canvas-size
+      // limit and crash the tab.
+      const estH = node.scrollHeight || 4000;
+      let scale = 1.6;
+      const MAX_CANVAS_H = 14000;
+      if (estH * scale > MAX_CANVAS_H) scale = Math.max(0.75, MAX_CANVAS_H / estH);
+
       const prev = { position: node.style.position, max: node.style.maxHeight,
-                     overflow: node.style.overflow };
+                     overflow: node.style.overflow, width: node.style.width };
+      node.style.width = lockW + 'px';
       node.style.position = 'static'; node.style.maxHeight = 'none';
       node.style.overflow = 'visible';
       try {
         await this.$nextTick();
         const [canvas, logoPng] = await Promise.all([
-          html2canvas(node, { scale: 2, useCORS: true, backgroundColor: '#ffffff',
-            logging: false,
+          html2canvas(node, { scale, useCORS: true, backgroundColor: '#ffffff',
+            logging: false, width: lockW,
+            windowWidth: Math.max(lockW + 48, document.documentElement.scrollWidth || 0),
             ignoreElements: (el) => el.classList && el.classList.contains('no-print') }),
           this._rasteriseLogo(),
         ]);
+
+        if (!canvas.width || !canvas.height) {
+          throw new Error('report capture was empty — make sure the report has finished rendering, then try again');
+        }
 
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
@@ -665,7 +687,7 @@ createApp({
         this.serror = this.error = 'PDF export failed: ' + e.message;
       } finally {
         node.style.position = prev.position; node.style.maxHeight = prev.max;
-        node.style.overflow = prev.overflow;
+        node.style.overflow = prev.overflow; node.style.width = prev.width;
         this.exporting = false;
       }
     },
