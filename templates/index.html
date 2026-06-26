@@ -338,11 +338,13 @@
                   <div class="col-6"><label class="form-label">Cross-section</label>
                     <select class="form-select form-select-sm" v-model="el.cross_section">
                       <option value="square">Square</option><option value="triangular">Triangular</option>
-                    </select></div>
+                    </select>
+                    <div class="form-text small-note ref-cap">Overall plan shape of the lattice frame → selects the Table 3-8 column.</div></div>
                   <div class="col-6"><label class="form-label">Member type</label>
                     <select class="form-select form-select-sm" v-model="el.member_type">
-                      <option value="flat">Flat-sided angles</option><option value="round">Round</option>
-                    </select></div>
+                      <option value="flat">Flat-sided (angles / channels / flats)</option><option value="round">Round / tubular</option>
+                    </select>
+                    <div class="form-text small-note ref-cap"><strong>Angle bars are flat-sided</strong> → Table 3-8 used directly. Choose Round only for tubular members (applies Table 3-10 C<sub>c</sub>).</div></div>
                   <div class="col-6 d-flex align-items-end" v-if="el.cross_section==='square'">
                     <div class="form-check"><input class="form-check-input" type="checkbox" :id="'yaw'+ei" v-model="el.yawed_wind">
                       <label class="form-check-label small-note" :for="'yaw'+ei">Yawed wind +15% (§3.1.5.6)</label></div>
