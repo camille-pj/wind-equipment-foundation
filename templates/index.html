@@ -505,15 +505,23 @@
               </div>
               <div class="text-center small-note text-muted mb-3">cumulative at
                 [[ result.summary.z_ref_m>0 ? 'z='+result.summary.z_ref_m.toFixed(3)+' m' : 'NGL (z=0)' ]]</div>
-              <div class="small-note fw-semibold mb-1">Per element — F, and shear/moment at the element's own base</div>
-              <table class="table table-sm table-bordered mb-0 small">
-                <thead class="table-light"><tr><th>Element</th><th>z<sub>base</sub> (m)</th><th>F<sub>X</sub> (kN)</th><th>F<sub>Y</sub> (kN)</th><th>arm (m)</th><th>M<sub>X</sub>@base (kN·m)</th><th>M<sub>Y</sub>@base (kN·m)</th></tr></thead>
-                <tbody><tr v-for="(e,i) in result.summary.per_element" :key="i">
-                  <td>[[ e.label ]]</td><td>[[ e.z_base_m.toFixed(3) ]]</td>
-                  <td>[[ e.Fx.toFixed(2) ]]</td><td>[[ e.Fy.toFixed(2) ]]</td>
-                  <td>[[ e.arm_base_m.toFixed(3) ]]</td>
-                  <td>[[ e.Mx_base.toFixed(2) ]]</td><td>[[ e.My_base.toFixed(2) ]]</td></tr></tbody>
-              </table>
+              <div class="small-note fw-semibold mb-1">Per element — pressures, force, and shear/moment at the element's own base</div>
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-0 small text-nowrap">
+                  <thead class="table-light"><tr>
+                    <th>Element</th><th>K<sub>z</sub></th><th>q<sub>z</sub> (kPa)</th><th>p (kPa)</th>
+                    <th>w<sub>X</sub> (kN/m)</th><th>F<sub>X</sub> (kN)</th><th>F<sub>Y</sub> (kN)</th>
+                    <th>z<sub>base</sub> (m)</th><th>arm (m)</th>
+                    <th>M<sub>X</sub>@base (kN·m)</th><th>M<sub>Y</sub>@base (kN·m)</th>
+                  </tr></thead>
+                  <tbody><tr v-for="(e,i) in result.summary.per_element" :key="i">
+                    <td>[[ e.label ]]</td><td>[[ e.Kz.toFixed(3) ]]</td><td>[[ e.qz_kpa.toFixed(3) ]]</td>
+                    <td>[[ e.p_kpa.toFixed(3) ]]</td><td>[[ e.w_x.toFixed(3) ]]</td>
+                    <td>[[ e.Fx.toFixed(2) ]]</td><td>[[ e.Fy.toFixed(2) ]]</td>
+                    <td>[[ e.z_base_m.toFixed(3) ]]</td><td>[[ e.arm_base_m.toFixed(3) ]]</td>
+                    <td>[[ e.Mx_base.toFixed(2) ]]</td><td>[[ e.My_base.toFixed(2) ]]</td></tr></tbody>
+                </table>
+              </div>
             </div>
           </div>
 
