@@ -74,7 +74,33 @@ def test_stacked_preset():
     # assembly (FX/FY reported separately; no resultant)
     assert rel_close(res["summary"]["FX_kN"], 12.0, tol=0.02)
     assert rel_close(res["summary"]["FY_kN"], 12.0, tol=0.02)
+    # cumulative overturning at NGL (z_ref = 0) is unchanged
     assert rel_close(res["summary"]["M_gov_kNm"], 57.0, tol=0.03)
+
+
+def test_per_element_moment_at_own_base():
+    """Each element's moment must be about its OWN base, not the global base."""
+    res = calculate(PRESETS["PI_STACK"])
+    eq, sup = res["elements"][0], res["elements"][1]
+    # equipment: z_base=2.0, L=7.189 -> arm = L/2 = 3.5945; M = Fx * arm
+    assert rel_close(eq["arm_base_m"], 7.189 / 2.0, tol=0.01)
+    assert rel_close(eq["Mx_base"], eq["Fx"] * eq["arm_base_m"])
+    # support: z_base=0, arm = 1.0 -> M = Fx * 1.0
+    assert rel_close(sup["arm_base_m"], 1.0)
+    assert rel_close(sup["Mx_base"], sup["Fx"] * 1.0)
+    # the equipment's own-base moment is much smaller than its about-NGL moment
+    assert eq["Mx_base"] < eq["Fx"] * eq["zbar_m"]
+
+
+def test_moment_reference_elevation():
+    """A reference elevation cuts the stack: only elements above it contribute,
+    with lever arms measured from that elevation."""
+    # cut at the equipment base (2000 mm): only the equipment is above it.
+    res = calculate({**PRESETS["PI_STACK"], "moment_ref_mm": 2000})
+    eq = res["elements"][0]
+    assert rel_close(res["summary"]["base_shear_x_kN"], eq["Fx"], tol=1e-6)
+    # moment at z_ref = equipment force * (zbar - 2.0) = the equipment's own-base M
+    assert rel_close(res["summary"]["Mx_kNm"], eq["Mx_base"], tol=1e-6)
 
 
 # ---- table-logic unit tests ---------------------------------------------

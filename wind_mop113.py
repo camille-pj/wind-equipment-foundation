@@ -477,6 +477,14 @@ def _compute_element(el: Dict[str, Any], g: Dict[str, Any]) -> Dict[str, Any]:
     governing = "X = Y (symmetric)" if abs(Fx - Fy) < 1e-9 else \
         ("X" if Fx >= Fy else "Y")
 
+    # Per-element shear & moment AT THE ELEMENT'S OWN BASE (z_base):
+    #   shear  V_i = F_i  (the wind force on this element)
+    #   moment M_i = F_i * (zbar_i - z_base_i)   -- lever from the element's own
+    #              base to the line of action (centroid) of its wind force.
+    arm_base_m = zbar_m - z_base_m
+    Mx_base = Fx * arm_base_m
+    My_base = Fy * arm_base_m
+
     res = {
         "label": label, "kind": kind,
         "z_base_m": z_base_m, "L_m": L_m, "z_top_m": z_top_m,
@@ -488,6 +496,7 @@ def _compute_element(el: Dict[str, Any], g: Dict[str, Any]) -> Dict[str, Any]:
         "A_x": A_x, "A_y": A_y, "b_x": b_x, "b_y": b_y,
         "w_x": w_x, "w_y": w_y, "Fx": Fx, "Fy": Fy,
         "zbar_m": zbar_m, "governing": governing,
+        "arm_base_m": arm_base_m, "Mx_base": Mx_base, "My_base": My_base,
         "draw_w_m": draw_w, "extra": extra,
     }
     res["steps"] = _element_steps(res, g)
@@ -503,7 +512,7 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     ``inputs`` shape::
 
         {
-          "V_kph": 310, "IFW": 1.15, "exposure": "C",
+          "V_kph": 310, "IFW": 1.15, "exposure": "C", "moment_ref_mm": 0,
           "elements": [ {element 1}, {element 2}, ... ]   # top-to-bottom or any order
         }
 
@@ -516,9 +525,13 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     V_mph = V_kph * KPH_TO_MPH
     IFW = float(inputs["IFW"])
     exposure = str(inputs.get("exposure", "C")).upper()
+    # Reference elevation (mm above NGL) at which the CUMULATIVE base shear and
+    # overturning moment are taken.  Default 0 = NGL / foundation.  Per-element
+    # shear & moment are always reported at each element's OWN base regardless.
+    z_ref_m = float(inputs.get("moment_ref_mm", 0.0) or 0.0) * MM_TO_M
 
     g = {"V_kph": V_kph, "V_ms": V_ms, "V_mph": V_mph, "IFW": IFW,
-         "exposure": exposure, "Q": Q_SI}
+         "exposure": exposure, "Q": Q_SI, "z_ref_m": z_ref_m}
 
     elements = [_compute_element(el, g) for el in inputs.get("elements", [])]
 
@@ -529,18 +542,21 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     FX = sum(e["Fx"] for e in elements)
     FY = sum(e["Fy"] for e in elements)
 
-    # Base shear = total wind force per direction (all elements act above base).
-    base_shear_x, base_shear_y = FX, FY
-    # Overturning about the base: M = sum(F_i * zbar_i) per direction.
-    Mx = sum(e["Fx"] * e["zbar_m"] for e in elements)
-    My = sum(e["Fy"] * e["zbar_m"] for e in elements)
+    # Cumulative shear & overturning at the reference elevation z_ref: a section
+    # cut at z_ref carries every element whose force acts ABOVE it.  Lever arm is
+    # measured from z_ref to each element's force centroid.
+    above = [e for e in elements if e["zbar_m"] >= z_ref_m - 1e-9]
+    base_shear_x = sum(e["Fx"] for e in above)
+    base_shear_y = sum(e["Fy"] for e in above)
+    Mx = sum(e["Fx"] * (e["zbar_m"] - z_ref_m) for e in above)
+    My = sum(e["Fy"] * (e["zbar_m"] - z_ref_m) for e in above)
     M_gov = max(Mx, My)
 
     governing = "X = Y (symmetric)" if abs(FX - FY) < 1e-9 else \
         ("X" if FX >= FY else "Y")
 
-    assembly_steps = _assembly_steps(elements, FX, FY,
-                                     base_shear_x, base_shear_y, Mx, My, governing)
+    assembly_steps = _assembly_steps(elements, FX, FY, base_shear_x,
+                                     base_shear_y, Mx, My, governing, z_ref_m)
 
     figures = _build_figures(elements, exposure, FX, FY, governing)
 
@@ -550,13 +566,15 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "elements": elements,
         "summary": {
             "FX_kN": FX, "FY_kN": FY,
-            "governing": governing,
+            "governing": governing, "z_ref_m": z_ref_m,
             "base_shear_x_kN": base_shear_x, "base_shear_y_kN": base_shear_y,
             "Mx_kNm": Mx, "My_kNm": My, "M_gov_kNm": M_gov,
             "per_element": [
                 {"label": e["label"], "qz_kpa": e["qz_kpa"], "p_kpa": e["p_kpa"],
                  "w_x": e["w_x"], "w_y": e["w_y"], "Fx": e["Fx"], "Fy": e["Fy"],
-                 "Kz": e["Kz"], "governing": e["governing"]}
+                 "Kz": e["Kz"], "governing": e["governing"],
+                 "z_base_m": e["z_base_m"], "arm_base_m": e["arm_base_m"],
+                 "Mx_base": e["Mx_base"], "My_base": e["My_base"]}
                 for e in elements
             ],
         },
@@ -711,13 +729,29 @@ def _element_steps(e: Dict[str, Any], g: Dict[str, Any]) -> List[Dict[str, Any]]
         steps.append({"title": "Lattice support — Route B (member-by-member)",
                       "lines": lines})
 
+    # Per-element shear & moment AT THIS ELEMENT'S OWN BASE (z_base).
+    arm = e["arm_base_m"]
+    sm_lines = [
+        r"\text{Element base } z_{base} = " + _f(e["z_base_m"], 3) + r"\ \text{m},\quad "
+        r"\text{force centroid } \bar z = " + _f(e["zbar_m"], 3) + r"\ \text{m},\quad "
+        r"\text{lever } a = \bar z - z_{base} = " + _f(arm, 3) + r"\ \text{m}",
+        r"\text{Shear at base: } V_X = F_X = " + _f(e["Fx"], 3)
+        + r"\ \text{kN},\quad V_Y = F_Y = " + _f(e["Fy"], 3) + r"\ \text{kN}",
+        r"\text{Moment at base: } M_X = F_X\,a = " + _f(e["Mx_base"], 3)
+        + r"\ \text{kN·m},\quad M_Y = F_Y\,a = " + _f(e["My_base"], 3)
+        + r"\ \text{kN·m}",
+    ]
+    steps.append({"title": "Shear &amp; moment at this element's base", "lines": sm_lines})
+
     return steps
 
 
 def _assembly_steps(elements, FX, FY,
-                    bsx, bsy, Mx, My, governing) -> List[Dict[str, Any]]:
+                    bsx, bsy, Mx, My, governing, z_ref_m) -> List[Dict[str, Any]]:
     fx_terms = " + ".join(_f(e["Fx"], 3) for e in elements) or "0"
     fy_terms = " + ".join(_f(e["Fy"], 3) for e in elements) or "0"
+    ref_txt = (r"NGL (z_{ref}=0)" if abs(z_ref_m) < 1e-9
+               else r"z_{ref}=" + _f(z_ref_m, 3) + r"\ \text{m}")
     steps = [
         {"title": "Totals", "lines": [
             r"\text{Total } F_X = \sum F_{X,i} = " + fx_terms + r" = " + _f(FX, 3)
@@ -728,11 +762,13 @@ def _assembly_steps(elements, FX, FY,
             r"separately — directional wind, no vector resultant. } "
             + governing + r"\text{ is the larger.)}",
         ]},
-        {"title": "Base shear &amp; overturning", "lines": [
-            r"V_{base,X} = \sum F_{X,i} = " + _f(bsx, 3) + r"\ \text{kN},\quad "
-            r"V_{base,Y} = " + _f(bsy, 3) + r"\ \text{kN}",
-            r"M = \sum F_i\, \bar z_i \quad\Rightarrow\quad M_X = " + _f(Mx, 3)
+        {"title": "Cumulative base shear &amp; overturning at " + ref_txt, "lines": [
+            r"V_{X} = \sum_{\bar z_i \geq z_{ref}} F_{X,i} = " + _f(bsx, 3)
+            + r"\ \text{kN},\quad V_{Y} = " + _f(bsy, 3) + r"\ \text{kN}",
+            r"M = \sum F_i\,(\bar z_i - z_{ref}) \;\Rightarrow\; M_X = " + _f(Mx, 3)
             + r"\ \text{kN·m},\quad M_Y = " + _f(My, 3) + r"\ \text{kN·m}",
+            r"\text{(Each element's own shear \& moment, at its own base, are "
+            r"shown in that element's section above.)}",
         ]},
     ]
     return steps
@@ -796,7 +832,7 @@ def _plinth(kz_height_mm, label="Plinth"):
 PRESETS = {
     "PI": {
         "label": "Preset 1 — Post Insulator (PI), circular + plinth",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "moment_ref_mm": 0,
         "elements": [
             {"label": "PI", "kind": "equipment_circular", "z_base_mm": 0,
              "z_tip_mm": 9189, "D_mm": 345, "cf": 0.9,
@@ -806,7 +842,7 @@ PRESETS = {
     },
     "CT": {
         "label": "Preset 2 — Current Transformer (CT), circular + plinth",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "moment_ref_mm": 0,
         "elements": [
             {"label": "CT", "kind": "equipment_circular", "z_base_mm": 0,
              "z_tip_mm": 10265, "D_mm": 440, "cf": 0.9,
@@ -816,7 +852,7 @@ PRESETS = {
     },
     "CB": {
         "label": "Preset 3 — Circuit Breaker (CB), rectangular + plinth",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "moment_ref_mm": 0,
         "elements": [
             {"label": "CB", "kind": "equipment_rectangular", "z_base_mm": 0,
              "z_tip_mm": 9336, "WX_mm": 2853.8, "WY_mm": 2353.1, "cf": 2.0,
@@ -826,7 +862,7 @@ PRESETS = {
     },
     "PI_STACK": {
         "label": "Preset 4 — PI on a 2 m lattice support (stacked)",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C",
+        "V_kph": 310, "IFW": 1.15, "exposure": "C", "moment_ref_mm": 0,
         "elements": [
             {"label": "PI", "kind": "equipment_circular", "z_base_mm": 2000,
              "z_tip_mm": 9189, "D_mm": 345, "cf": 0.9,

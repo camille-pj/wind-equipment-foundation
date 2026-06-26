@@ -195,6 +195,15 @@
               </div>
             </div>
 
+            <div class="mb-2 mt-2">
+              <label class="form-label">Overturning reference elevation (mm)</label>
+              <input type="number" class="form-control" v-model.number="f.moment_ref_mm">
+              <div class="form-text ref-cap">Datum for the <em>cumulative</em> base shear &amp; overturning
+                (0 = NGL / foundation). Each element's own shear &amp; moment are always taken at its own base.
+                <span v-if="result && result.summary.z_ref_m>0">→ cut at [[ result.summary.z_ref_m.toFixed(3) ]] m
+                  (only elements above it contribute)</span></div>
+            </div>
+
             <div class="small-note text-muted mt-2">F<sub>X</sub> and F<sub>Y</sub> are reported separately and
               applied to the model one principal direction at a time (directional wind — no vector resultant).</div>
           </div>
@@ -489,17 +498,21 @@
                 <div class="col"><div class="text-muted small">Total F<sub>Y</sub></div><div class="val text-danger">[[ result.summary.FY_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
                 <div class="col"><div class="text-muted small">Larger dir.</div><div class="val">[[ result.summary.governing ]]</div></div>
               </div>
-              <div class="row text-center g-2 mb-3">
+              <div class="row text-center g-2 mb-1">
                 <div class="col"><div class="text-muted small">Base shear X</div><div class="val">[[ result.summary.base_shear_x_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
                 <div class="col"><div class="text-muted small">Base shear Y</div><div class="val">[[ result.summary.base_shear_y_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
                 <div class="col"><div class="text-muted small">Overturning M</div><div class="val">[[ result.summary.M_gov_kNm.toFixed(1) ]]</div><div class="small">kN·m</div></div>
               </div>
+              <div class="text-center small-note text-muted mb-3">cumulative at
+                [[ result.summary.z_ref_m>0 ? 'z='+result.summary.z_ref_m.toFixed(3)+' m' : 'NGL (z=0)' ]]</div>
+              <div class="small-note fw-semibold mb-1">Per element — F, and shear/moment at the element's own base</div>
               <table class="table table-sm table-bordered mb-0 small">
-                <thead class="table-light"><tr><th>Element</th><th>K<sub>z</sub></th><th>q<sub>z</sub> (kPa)</th><th>p (kPa)</th><th>w<sub>X</sub> (kN/m)</th><th>F<sub>X</sub> (kN)</th><th>F<sub>Y</sub> (kN)</th></tr></thead>
+                <thead class="table-light"><tr><th>Element</th><th>z<sub>base</sub> (m)</th><th>F<sub>X</sub> (kN)</th><th>F<sub>Y</sub> (kN)</th><th>arm (m)</th><th>M<sub>X</sub>@base (kN·m)</th><th>M<sub>Y</sub>@base (kN·m)</th></tr></thead>
                 <tbody><tr v-for="(e,i) in result.summary.per_element" :key="i">
-                  <td>[[ e.label ]]</td><td>[[ e.Kz.toFixed(3) ]]</td><td>[[ e.qz_kpa.toFixed(3) ]]</td>
-                  <td>[[ e.p_kpa.toFixed(3) ]]</td><td>[[ e.w_x.toFixed(3) ]]</td>
-                  <td>[[ e.Fx.toFixed(2) ]]</td><td>[[ e.Fy.toFixed(2) ]]</td></tr></tbody>
+                  <td>[[ e.label ]]</td><td>[[ e.z_base_m.toFixed(3) ]]</td>
+                  <td>[[ e.Fx.toFixed(2) ]]</td><td>[[ e.Fy.toFixed(2) ]]</td>
+                  <td>[[ e.arm_base_m.toFixed(3) ]]</td>
+                  <td>[[ e.Mx_base.toFixed(2) ]]</td><td>[[ e.My_base.toFixed(2) ]]</td></tr></tbody>
               </table>
             </div>
           </div>
