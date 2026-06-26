@@ -24,6 +24,37 @@ const KIND_LABELS = {
 // Deep clone helper (presets must not be mutated by the form).
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
+// ---- APEC report identity (matches the letterhead PDF format) ----------
+const COMPANY = {
+  nameUpper: 'ALBERT PAMONAG ENGINEERING CONSULTANCY',
+  reportTitle: 'APEC Structural Calculation Report',
+  addressLine: 'Unit 510, 5th Floor, EEC Building, Bayani Road, Western Bicutan, Taguig City',
+  phone: '+63.917.899.6340',
+  email: 'albert@apeconsultancy.net',
+  website: 'www.apeconsultancy.net',
+};
+const LOGO_VB = { w: 940, h: 108 };
+const LG = '#1f5130', LG_DARK = '#143a22';
+function apecLogoSVGMarkup(widthPx) {
+  const h = widthPx * (LOGO_VB.h / LOGO_VB.w);
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${h}" viewBox="0 0 ${LOGO_VB.w} ${LOGO_VB.h}">` +
+    `<path d="M14 100 C 64 90, 116 88, 150 94 C 116 102, 64 104, 14 100 Z" fill="${LG_DARK}"/>` +
+    `<path d="M14 102 C 12 56, 62 22, 150 6 C 118 40, 94 70, 90 102 C 64 102, 38 102, 14 102 Z" fill="${LG}"/>` +
+    `<path d="M62 82 C 72 52, 94 32, 126 18 C 108 42, 94 60, 88 86 C 78 84, 70 84, 62 82 Z" fill="#ffffff"/>` +
+    `<text x="176" y="92" font-family="Georgia, 'Times New Roman', serif" font-weight="700" fill="${LG}" letter-spacing="0.5">` +
+    `<tspan font-size="34">A</tspan><tspan font-size="26">LBERT </tspan>` +
+    `<tspan font-size="34">P</tspan><tspan font-size="26">AMONAG </tspan>` +
+    `<tspan font-size="34">E</tspan><tspan font-size="26">NGINEERING </tspan>` +
+    `<tspan font-size="34">C</tspan><tspan font-size="26">ONSULTANCY</tspan></text></svg>`
+  );
+}
+
+// Plotly green palette (shades of green for all figures).
+const GP = { primary: '#1f5130', mid: '#2e7d4f', light: '#6aa84f',
+             accent: '#8fbf73', dark: '#143a22', faint: '#cfe3d4',
+             marker: '#143a22', wind: '#3f7d3f' };
+
 createApp({
   delimiters: ['[[', ']]'],
 
@@ -37,6 +68,7 @@ createApp({
       result: null,
       error: null,
       loading: false,
+      exporting: false,
       _timer: null,
       // --- seismic ---
       seismicPresets: window.MOP113_SEISMIC_PRESETS,
@@ -192,57 +224,61 @@ createApp({
     drawStack(s) {
       const shapes = [];
       const annotations = [];
-      const palette = { lattice_truss: 'rgba(108,117,125,0.35)',
-                        pedestal_plinth: 'rgba(73,80,87,0.30)' };
+      const fillByKind = { lattice_truss: 'rgba(46,125,79,0.20)',
+                           pedestal_plinth: 'rgba(20,58,34,0.22)' };
+      const lineByKind = { lattice_truss: GP.mid, pedestal_plinth: GP.dark };
       const halfMax = Math.max(s.w_max, 0.4) * 1.7;
 
       // Ground line (NGL).
       shapes.push({ type: 'line', x0: -halfMax, x1: halfMax, y0: 0, y1: 0,
-        line: { color: '#198754', width: 2, dash: 'dot' } });
-      annotations.push({ x: -halfMax, y: 0, text: 'NGL', showarrow: false,
-        xanchor: 'left', yanchor: 'bottom', font: { size: 10, color: '#198754' } });
+        line: { color: GP.primary, width: 2, dash: 'dot' } });
+      annotations.push({ x: 0, y: 0, ax: 0, ay: 11, showarrow: false,
+        text: 'NGL', xanchor: 'center', font: { size: 9, color: GP.primary } });
 
       s.elements.forEach((e) => {
-        const fill = palette[e.kind] || 'rgba(13,110,253,0.18)';
-        const line = e.kind === 'lattice_truss' ? '#6c757d' : '#0d6efd';
+        const fill = fillByKind[e.kind] || 'rgba(106,168,79,0.22)';
+        const line = lineByKind[e.kind] || GP.primary;
         shapes.push({ type: 'rect', x0: e.x0, x1: e.x1, y0: e.y0, y1: e.y1,
           line: { color: line, width: 2 }, fillcolor: fill });
-        // Label + Kz + F inside/next to the element.
-        annotations.push({ x: 0, y: (e.y0 + e.y1) / 2, showarrow: false,
-          text: `${e.label}<br><span style="font-size:10px">K<sub>z</sub>=${e.Kz}, F=${e.F} kN</span>`,
-          font: { size: 11, color: line } });
-        // z annotations on the left.
-        annotations.push({ x: e.x0, y: e.y1, showarrow: false, xanchor: 'right',
-          text: `${e.z_top} m`, font: { size: 9, color: '#555' } });
+        const midY = (e.y0 + e.y1) / 2;
+        // Info label OUTSIDE to the right, anchored by a fixed pixel offset so it
+        // never overlaps the (often very narrow) element body or its neighbours.
+        annotations.push({ x: e.x1, y: midY, ax: 78, ay: 0, showarrow: true,
+          arrowhead: 2, arrowsize: 1, arrowwidth: 1, arrowcolor: '#b9c7bd',
+          xanchor: 'left', align: 'left',
+          text: `<b>${e.label}</b><br><span style="font-size:9px">K<sub>z</sub>=${e.Kz} · F=${e.F} kN</span>`,
+          font: { size: 10, color: line }, bgcolor: 'rgba(255,255,255,0.82)' });
+        // Elevation tick on the left (small pixel offset, no overlap).
+        annotations.push({ x: e.x0, y: e.y1, ax: -6, ay: 0, showarrow: false,
+          xanchor: 'right', text: `${e.z_top} m`, font: { size: 8, color: '#6b7d70' } });
       });
-      // base elevation of the lowest element.
-      annotations.push({ x: s.elements[s.elements.length - 1].x0,
-        y: s.elements[s.elements.length - 1].y0, showarrow: false, xanchor: 'right',
-        text: `${s.elements[s.elements.length - 1].z_base} m`, font: { size: 9, color: '#555' } });
+      // base elevation of the lowest element
+      const last = s.elements[s.elements.length - 1];
+      annotations.push({ x: last.x0, y: last.y0, ax: -6, ay: 0, showarrow: false,
+        xanchor: 'right', text: `${last.z_base} m`, font: { size: 8, color: '#6b7d70' } });
 
-      // Wind arrow on the windward side.
-      const wy = s.z_max * 0.6;
-      annotations.push({ x: -halfMax * 0.55, y: wy, ax: -halfMax * 0.95, ay: wy,
-        xref: 'x', yref: 'y', axref: 'x', ayref: 'y', showarrow: true,
-        arrowhead: 3, arrowsize: 1.5, arrowwidth: 2, arrowcolor: '#fd7e14' });
-      annotations.push({ x: -halfMax * 0.95, y: wy + s.z_max * 0.05, showarrow: false,
-        text: '🌬 WIND', xanchor: 'left', font: { size: 12, color: '#fd7e14' } });
+      // Wind arrow on the windward (left) side — pixel offset, plain text label.
+      const wy = s.z_max * 0.62;
+      annotations.push({ x: -halfMax * 0.55, y: wy, ax: -46, ay: 0, showarrow: true,
+        arrowhead: 3, arrowsize: 1.5, arrowwidth: 2, arrowcolor: GP.light, text: '' });
+      annotations.push({ x: -halfMax * 0.55, y: wy, ax: -46, ay: -13, showarrow: false,
+        xanchor: 'left', text: 'WIND →', font: { size: 10, color: GP.mid } });
 
       const layout = {
-        xaxis: { range: [-halfMax * 1.1, halfMax * 1.1], zeroline: false,
+        xaxis: { range: [-halfMax * 1.25, halfMax * 1.25], zeroline: false,
                  scaleanchor: 'y', scaleratio: 1, title: 'm' },
-        yaxis: { range: [-s.z_max * 0.08, s.z_max * 1.1], title: 'm' },
+        yaxis: { range: [-s.z_max * 0.08, s.z_max * 1.12], title: 'm' },
         shapes, annotations, showlegend: false,
-        margin: { t: 20, r: 10, b: 40, l: 50 }, height: 420,
+        margin: { t: 20, r: 96, b: 40, l: 56 }, height: 440,
       };
       Plotly.react(this.$refs.figStack, [], layout, { responsive: true, displaylogo: false });
     },
 
     drawForce(fb) {
       const traces = [
-        { x: fb.labels, y: fb.Fx, name: 'F_X', type: 'bar', marker: { color: '#0d6efd' },
+        { x: fb.labels, y: fb.Fx, name: 'F_X', type: 'bar', marker: { color: GP.primary },
           text: fb.Fx.map(v => v.toFixed(1)), textposition: 'auto' },
-        { x: fb.labels, y: fb.Fy, name: 'F_Y', type: 'bar', marker: { color: '#20c997' },
+        { x: fb.labels, y: fb.Fy, name: 'F_Y', type: 'bar', marker: { color: GP.light },
           text: fb.Fy.map(v => v.toFixed(1)), textposition: 'auto' },
       ];
       const layout = {
@@ -260,10 +296,12 @@ createApp({
     drawKz(kz) {
       const traces = [
         { x: kz.heights, y: kz.kz, mode: 'lines+markers', name: `Table 3-1 (Exp. ${kz.exposure})`,
-          line: { color: '#0d6efd' }, marker: { size: 6 } },
+          line: { color: GP.mid }, marker: { size: 6 } },
         { x: kz.points.map(p => p.h_ft), y: kz.points.map(p => p.kz), mode: 'markers+text',
-          name: 'elements', text: kz.points.map(p => p.label), textposition: 'top center',
-          marker: { color: '#dc3545', size: 13, symbol: 'star' } },
+          name: 'elements', text: kz.points.map(p => p.label),
+          textposition: kz.points.map((p, i) => i % 2 ? 'bottom center' : 'top center'),
+          textfont: { size: 10, color: GP.dark },
+          marker: { color: GP.dark, size: 12, symbol: 'star' } },
       ];
       const layout = {
         title: { text: 'K<sub>z</sub> vs height — each element highlighted', font: { size: 13 } },
@@ -314,13 +352,15 @@ createApp({
       // NSCP design response spectrum: Sa vs actual period T, + 1.4x envelope.
       const traces = [
         { x: sp.T, y: sp.Sa, mode: 'lines', name: 'Design spectrum',
-          line: { color: '#0d6efd', width: 2 } },
+          line: { color: GP.primary, width: 2 } },
         { x: sp.T, y: sp.Sa_14, mode: 'lines', name: '1.4× (TH reference)',
-          line: { color: '#adb5bd', width: 1, dash: 'dash' } },
+          line: { color: GP.accent, width: 1, dash: 'dash' } },
         { x: [sp.struct_T], y: [sp.struct_Sa], mode: 'markers',
           name: 'Structure (T, Sₐ)',
-          marker: { color: '#dc3545', size: 14, symbol: 'star' } },
+          marker: { color: GP.dark, size: 14, symbol: 'star' } },
       ];
+      // place the two callouts on opposite sides so their text never overlaps
+      const tsRight = sp.Ts < (Math.max(...sp.T) * 0.6);
       const layout = {
         title: { text: `NSCP design spectrum — S<sub>a,max</sub>=${sp.sa_max.toFixed(3)} g, ` +
                        `T₀=${sp.T0.toFixed(3)} s, Tₛ=${sp.Ts.toFixed(3)} s`, font: { size: 13 } },
@@ -329,15 +369,16 @@ createApp({
         legend: { orientation: 'h', y: -0.28 },
         shapes: [
           { type: 'line', x0: sp.T0, x1: sp.T0, y0: 0, y1: sp.sa_max,
-            line: { color: '#6c757d', width: 1, dash: 'dot' } },
+            line: { color: '#9bb0a2', width: 1, dash: 'dot' } },
           { type: 'line', x0: sp.Ts, x1: sp.Ts, y0: 0, y1: sp.sa_max,
-            line: { color: '#6c757d', width: 1, dash: 'dot' } },
+            line: { color: '#9bb0a2', width: 1, dash: 'dot' } },
         ],
         annotations: [
           { x: sp.Ts, y: sp.sa_max, text: `Tₛ=${sp.Ts.toFixed(3)}`, showarrow: true,
-            arrowhead: 3, ax: 30, ay: -22, font: { size: 10 } },
-          { x: sp.struct_T, y: sp.struct_Sa, ax: 35, ay: -35, arrowhead: 3,
-            showarrow: true, font: { color: '#dc3545', size: 10 },
+            arrowhead: 3, ax: tsRight ? 34 : -34, ay: -20,
+            font: { size: 10, color: GP.mid } },
+          { x: sp.struct_T, y: sp.struct_Sa, ax: tsRight ? -36 : 38, ay: 34, arrowhead: 3,
+            showarrow: true, font: { color: GP.dark, size: 10 },
             text: `(${sp.struct_T.toFixed(2)}, ${sp.struct_Sa.toFixed(3)})` },
         ],
       };
@@ -347,20 +388,20 @@ createApp({
     drawADRS(ad) {
       const traces = [
         { x: ad.Sd, y: ad.Sa, mode: 'lines', name: 'Elastic ADRS',
-          line: { color: '#0d6efd', width: 2 } },
+          line: { color: GP.primary, width: 2 } },
       ];
       // radial constant-period lines
       ad.radial.forEach(rl => {
         traces.push({ x: rl.x, y: rl.y, mode: 'lines', name: `T=${rl.T}s`,
-          line: { color: '#dee2e6', width: 1 }, hoverinfo: 'name', showlegend: false });
+          line: { color: GP.faint, width: 1 }, hoverinfo: 'name', showlegend: false });
       });
       if (ad.reduced) {
         traces.push({ x: ad.reduced.Sd, y: ad.reduced.Sa, mode: 'lines',
-          name: 'Reduced ADRS (ATC-40)', line: { color: '#20c997', width: 2, dash: 'dot' } });
+          name: 'Reduced ADRS (ATC-40)', line: { color: GP.light, width: 2, dash: 'dot' } });
         if (ad.reduced.apn != null) {
           traces.push({ x: [ad.reduced.dpi], y: [ad.reduced.apn], mode: 'markers',
             name: 'Performance point',
-            marker: { color: '#dc3545', size: 13, symbol: 'star' } });
+            marker: { color: GP.dark, size: 13, symbol: 'star' } });
         }
       }
       const layout = {
@@ -408,7 +449,7 @@ createApp({
     drawVconv(sb) {
       const traces = [{
         x: sb.labels, y: sb.kph, type: 'bar',
-        marker: { color: ['#6c757d', '#dc3545'] },
+        marker: { color: [GP.light, GP.primary] },
         text: sb.kph.map((v, i) => `${v.toFixed(1)} kph<br>${sb.ms[i].toFixed(2)} m/s`),
         textposition: 'auto',
       }];
@@ -426,15 +467,128 @@ createApp({
       this.switchTab('wind');
     },
 
-    /* ---------- print (active tab) ---------- */
-    printReport() {
+    /* ================= PDF EXPORT (APEC letterhead) ================= */
+    // Rasterise the shared APEC logo SVG to a PNG data URL (crisp on every page).
+    async _rasteriseLogo() {
+      try {
+        const widthPx = 1880;
+        const heightPx = Math.round(widthPx * (LOGO_VB.h / LOGO_VB.w));
+        const url = 'data:image/svg+xml;charset=utf-8,' +
+          encodeURIComponent(apecLogoSVGMarkup(widthPx));
+        const img = new Image();
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+        const c = document.createElement('canvas');
+        c.width = widthPx; c.height = heightPx;
+        c.getContext('2d').drawImage(img, 0, 0, widthPx, heightPx);
+        return c.toDataURL('image/png');
+      } catch { return null; }
+    },
+
+    _drawHeader(pdf, pageW, margin, logoPng, projectName) {
+      const GREEN = [34, 139, 34], GREEN_DARK = [20, 83, 45], GRAY = [150, 150, 150];
+      if (logoPng) {
+        const logoH = 7, logoW = logoH * (LOGO_VB.w / LOGO_VB.h);
+        pdf.addImage(logoPng, 'PNG', margin, margin, logoW, logoH);
+      } else {
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11);
+        pdf.setTextColor(...GREEN_DARK);
+        pdf.text(COMPANY.reportTitle, margin, margin + 5);
+      }
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY);
+      pdf.text(projectName || '', pageW - margin, margin + 5.5, { align: 'right' });
+      pdf.setDrawColor(...GREEN); pdf.setLineWidth(0.4);
+      pdf.line(margin, margin + 8, pageW - margin, margin + 8);
+    },
+
+    _drawFooter(pdf, pageW, pageH, margin, page, total) {
+      const GREEN = [34, 139, 34], GRAY = [150, 150, 150];
+      const cx = pageW / 2; let y = pageH - 20;
+      pdf.setDrawColor(...GREEN); pdf.setLineWidth(0.3);
+      pdf.line(margin, y - 4, pageW - margin, y - 4);
+      pdf.setTextColor(...GREEN); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9);
+      pdf.text(COMPANY.nameUpper, cx, y, { align: 'center' }); y += 4;
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5);
+      pdf.text(COMPANY.addressLine, cx, y, { align: 'center' }); y += 3.6;
+      pdf.text(`Tel  ${COMPANY.phone}      Email  ${COMPANY.email}      Web  ${COMPANY.website}`,
+               cx, y, { align: 'center' }); y += 4;
+      pdf.setTextColor(...GRAY); pdf.setFontSize(7);
+      pdf.text(`Page ${page} of ${total}`, cx, y, { align: 'center' });
+    },
+
+    _projectName() {
+      if (this.activeTab === 'wind') return 'Wind Load — ASCE MOP 113 (Eq. 3-1)';
+      if (this.activeTab === 'vconv') return `Wind Speed NSCP→MOP — ${this.vc.tag || ''}`;
+      return 'Seismic — NSCP 2015 Section 208';
+    },
+
+    // Main entry — replaces window.print(): capture the active report and
+    // slice it across A4 pages with the green APEC header/footer on each page.
+    async printReport() {
+      if (!window.jspdf || !window.html2canvas) { window.print(); return; }
+      // resize the active tab's Plotly figures so they capture sharply
       const byTab = {
         wind: [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz],
         vconv: [this.$refs.figVconv],
         seismic: [this.$refs.figSpectrum, this.$refs.figADRS],
       };
       (byTab[this.activeTab] || []).forEach(el => el && Plotly.Plots.resize(el));
-      window.print();
+
+      // the visible report column
+      const node = [...document.querySelectorAll('.sticky-col')]
+        .find(el => el.offsetParent !== null);
+      if (!node) return;
+
+      this.exporting = true;
+      // unclamp the sticky/scroll box so html2canvas sees the full content
+      const prev = { position: node.style.position, max: node.style.maxHeight,
+                     overflow: node.style.overflow };
+      node.style.position = 'static'; node.style.maxHeight = 'none';
+      node.style.overflow = 'visible';
+      try {
+        await this.$nextTick();
+        const [canvas, logoPng] = await Promise.all([
+          html2canvas(node, { scale: 2, useCORS: true, backgroundColor: '#ffffff',
+            logging: false,
+            ignoreElements: (el) => el.classList && el.classList.contains('no-print') }),
+          this._rasteriseLogo(),
+        ]);
+
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+        const pageW = pdf.internal.pageSize.getWidth();
+        const pageH = pdf.internal.pageSize.getHeight();
+        const margin = 10, headerH = 12, footerH = 26;
+        const usableW = pageW - margin * 2;
+        const bodyTop = margin + headerH;
+        const bodyAvailH = (pageH - footerH) - bodyTop;
+        const pxPerMm = canvas.width / usableW;
+        const pageBodyPx = bodyAvailH * pxPerMm;
+        const totalPages = Math.max(1, Math.ceil(canvas.height / pageBodyPx));
+        const project = this._projectName();
+
+        for (let p = 0; p < totalPages; p++) {
+          if (p > 0) pdf.addPage();
+          const sliceY = p * pageBodyPx;
+          const sliceH = Math.min(pageBodyPx, canvas.height - sliceY);
+          const slice = document.createElement('canvas');
+          slice.width = canvas.width; slice.height = sliceH;
+          slice.getContext('2d').drawImage(canvas, 0, sliceY, canvas.width, sliceH,
+                                            0, 0, canvas.width, sliceH);
+          // JPEG (q=0.92) keeps the figure/text legible while keeping the
+          // file small — full-page PNG slices at scale 2 balloon to tens of MB.
+          pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', margin, bodyTop,
+                       usableW, sliceH / pxPerMm);
+          this._drawHeader(pdf, pageW, margin, logoPng, project);
+          this._drawFooter(pdf, pageW, pageH, margin, p + 1, totalPages);
+        }
+        pdf.save(`APEC-${this.activeTab}-report.pdf`);
+      } catch (e) {
+        this.serror = this.error = 'PDF export failed: ' + e.message;
+      } finally {
+        node.style.position = prev.position; node.style.maxHeight = prev.max;
+        node.style.overflow = prev.overflow;
+        this.exporting = false;
+      }
     },
   },
 }).mount('#app');

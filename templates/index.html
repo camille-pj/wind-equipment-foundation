@@ -17,12 +17,20 @@
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
   <script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+  <!-- PDF report generation (APEC letterhead format) -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
 
   <style>
+    /* APEC green palette */
+    :root {
+      --apec-green: #1f5130; --apec-green-mid: #2e7d4f; --apec-green-light: #6aa84f;
+      --apec-green-dark: #143a22; --apec-green-soft: #e8f1ea;
+    }
     body { background: #f5f6f8; }
     .ref-cap { font-style: italic; }
-    .report-step { border-left: 3px solid #0d6efd; padding-left: .9rem; margin-bottom: 1.2rem; }
-    .elem-report { border-left: 3px solid #198754; padding-left: .8rem; margin-bottom: 1.5rem; }
+    .report-step { border-left: 3px solid var(--apec-green-mid); padding-left: .9rem; margin-bottom: 1.2rem; }
+    .elem-report { border-left: 3px solid var(--apec-green); padding-left: .8rem; margin-bottom: 1.5rem; }
     .mjx-line { margin: .3rem 0; overflow-x: auto; }
     .summary-card .val { font-size: 1.2rem; font-weight: 700; }
     .table-peek { font-size: .78rem; }
@@ -32,8 +40,25 @@
     .form-label { font-weight: 600; margin-bottom: .12rem; }
     .hl-row { background: #fff3cd !important; }
     .elem-card .card-header { cursor: default; }
-    .ref-link { font-size: .78rem; cursor: pointer; }
+    .ref-link { font-size: .78rem; cursor: pointer; color: var(--apec-green-mid); }
     .small-note { font-size: .76rem; }
+    /* Re-theme Bootstrap accents to shades of green */
+    .navbar.bg-dark { background-color: var(--apec-green-dark) !important; }
+    .bg-primary { background-color: var(--apec-green) !important; }
+    .bg-success { background-color: var(--apec-green-mid) !important; }
+    .bg-success-subtle { background-color: var(--apec-green-soft) !important; }
+    .text-primary { color: var(--apec-green-mid) !important; }
+    .text-danger { color: var(--apec-green-dark) !important; }   /* critical values in dark green */
+    .text-success { color: var(--apec-green) !important; }
+    .btn-dark { background-color: var(--apec-green-dark); border-color: var(--apec-green-dark); }
+    .btn-dark:hover { background-color: var(--apec-green); border-color: var(--apec-green); }
+    .btn-outline-primary { color: var(--apec-green-mid); border-color: var(--apec-green-mid); }
+    .btn-outline-primary:hover { background-color: var(--apec-green-mid); border-color: var(--apec-green-mid); }
+    .btn-success { background-color: var(--apec-green); border-color: var(--apec-green); }
+    .btn-success:hover { background-color: var(--apec-green-dark); border-color: var(--apec-green-dark); }
+    .nav-tabs .nav-link.active { color: var(--apec-green-dark); font-weight: 600; }
+    .nav-tabs .nav-link { color: var(--apec-green-mid); }
+    .report-step h6 .text-success, .elem-report h6 { color: var(--apec-green) !important; }
     @media print {
       .no-print { display: none !important; }
       body { background: #fff; }
@@ -449,7 +474,7 @@
             <h4 class="mb-0">Calculation report</h4>
             <div>
               <span v-if="loading" class="spinner-border spinner-border-sm text-primary me-2"></span>
-              <button class="btn btn-sm btn-dark" @click="printReport">🖨 Print / Export PDF</button>
+              <button class="btn btn-sm btn-dark" @click="printReport" :disabled="exporting">[[ exporting ? "Generating PDF…" : "📄 Export PDF" ]]</button>
             </div>
           </div>
 
@@ -595,7 +620,7 @@
               <h4 class="mb-0">Conversion</h4>
               <div>
                 <span v-if="vloading" class="spinner-border spinner-border-sm text-primary me-2"></span>
-                <button class="btn btn-sm btn-dark" @click="printReport">🖨 Print / Export PDF</button>
+                <button class="btn btn-sm btn-dark" @click="printReport" :disabled="exporting">[[ exporting ? "Generating PDF…" : "📄 Export PDF" ]]</button>
               </div>
             </div>
 
@@ -788,7 +813,7 @@
               <h4 class="mb-0">NSCP 2015 seismic report</h4>
               <div>
                 <span v-if="sloading" class="spinner-border spinner-border-sm text-primary me-2"></span>
-                <button class="btn btn-sm btn-dark" @click="printReport">🖨 Print / Export PDF</button>
+                <button class="btn btn-sm btn-dark" @click="printReport" :disabled="exporting">[[ exporting ? "Generating PDF…" : "📄 Export PDF" ]]</button>
               </div>
             </div>
 
