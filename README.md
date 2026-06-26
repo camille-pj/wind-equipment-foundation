@@ -35,8 +35,8 @@ The calculation runs as a four-stage chain so the user can read off each quantit
 3. line load `w = p · b` → kN/m (`b` = projected width normal to the wind)
 4. element force `F = p · A = w · L` → kN
 
-Assembly aggregates: total `FX`/`FY`, resultant `FR`, base shear, and overturning moment
-`M = Σ Fᵢ · z̄ᵢ` about the base.
+Assembly aggregates: total `FX` and `FY` (reported and applied **separately** — directional
+wind, no vector resultant), plus base shear and overturning moment `M = Σ Fᵢ · z̄ᵢ` about the base.
 
 ## The stacked model
 
@@ -75,12 +75,12 @@ panel rendering the exact MOP 113 table/equation it comes from.
 pytest -v
 ```
 
-| Preset | Model | Kz | qz (kPa) | FX (kN) | FY (kN) | FR (kN) |
-|---|---|---|---|---|---|---|
-| PI | circular + plinth | 0.981 | 5.13 | 13.65 | 13.65 | **19.30** |
-| CT | circular + plinth | 1.002 | 5.24 | 19.36 | 19.36 | **27.38** |
-| CB | rectangular + plinth | 0.984 | 5.14 | 234.3 | 193.4 | **303.8** (X governs) |
-| PI + 2 m lattice support | stacked (2 elements) | — | — | 12.0 | 12.0 | **17.0** (M ≈ 57 kN·m) |
+| Preset | Model | Kz | qz (kPa) | FX (kN) | FY (kN) |
+|---|---|---|---|---|---|
+| PI | circular + plinth | 0.981 | 5.13 | **13.65** | **13.65** |
+| CT | circular + plinth | 1.002 | 5.24 | **19.36** | **19.36** |
+| CB | rectangular + plinth | 0.984 | 5.14 | **234.3** | **193.4** (X larger) |
+| PI + 2 m lattice support | stacked (2 elements) | — | — | **12.0** | **12.0** (M ≈ 57 kN·m) |
 
 Presets 1–4 are **illustrative sample inputs for demonstration only** (not validated project
 data). They exist to lock the engine arithmetic — the tabulated targets are the values the engine

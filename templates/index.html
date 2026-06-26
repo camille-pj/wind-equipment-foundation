@@ -169,10 +169,8 @@
               </div>
             </div>
 
-            <div class="form-check form-switch mt-2">
-              <input class="form-check-input" type="checkbox" id="f075" v-model="f.apply_075">
-              <label class="form-check-label" for="f075">Apply 0.75 two-face factor to resultant <em>(off by default)</em></label>
-            </div>
+            <div class="small-note text-muted mt-2">F<sub>X</sub> and F<sub>Y</sub> are reported separately and
+              applied to the model one principal direction at a time (directional wind — no vector resultant).</div>
           </div>
         </div>
 
@@ -398,7 +396,7 @@
                     <strong>When to use each basis</strong> (effective height z, §3.1.5.2.2 — the height at which the wind is evaluated):
                     <ul class="mb-0 ps-3">
                       <li><strong>Tip / top</strong> (z = z<sub>top</sub>): most conservative; the single highest K<sub>z</sub> over the element — default.</li>
-                      <li><strong>Centroid</strong> (z = z<sub>base</sub> + L/2): K<sub>z</sub> at the element's mid-height; appropriate when the wind resultant acts at the centroid of a uniform projected area.</li>
+                      <li><strong>Centroid</strong> (z = z<sub>base</sub> + L/2): K<sub>z</sub> at the element's mid-height; appropriate when the wind force acts at the centroid of a uniform projected area.</li>
                       <li><strong>Custom</strong>: evaluate at a stated reference height (e.g. a base plinth taken at the governing equipment height).</li>
                     </ul>
                   </div>
@@ -461,10 +459,9 @@
             <div class="card-header fw-bold py-2">Summary</div>
             <div class="card-body">
               <div class="row text-center g-2 mb-3">
-                <div class="col"><div class="text-muted small">Total F<sub>X</sub></div><div class="val">[[ result.summary.FX_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
-                <div class="col"><div class="text-muted small">Total F<sub>Y</sub></div><div class="val">[[ result.summary.FY_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
-                <div class="col"><div class="text-muted small">Resultant F<sub>R</sub></div><div class="val text-danger">[[ result.summary.FR_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
-                <div class="col"><div class="text-muted small">Governs</div><div class="val">[[ result.summary.governing ]]</div></div>
+                <div class="col"><div class="text-muted small">Total F<sub>X</sub></div><div class="val text-danger">[[ result.summary.FX_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
+                <div class="col"><div class="text-muted small">Total F<sub>Y</sub></div><div class="val text-danger">[[ result.summary.FY_kN.toFixed(2) ]]</div><div class="small">kN</div></div>
+                <div class="col"><div class="text-muted small">Larger dir.</div><div class="val">[[ result.summary.governing ]]</div></div>
               </div>
               <div class="row text-center g-2 mb-3">
                 <div class="col"><div class="text-muted small">Base shear X</div><div class="val">[[ result.summary.base_shear_x_kN.toFixed(2) ]]</div><div class="small">kN</div></div>

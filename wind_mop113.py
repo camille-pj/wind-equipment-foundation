@@ -503,7 +503,7 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     ``inputs`` shape::
 
         {
-          "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": false,
+          "V_kph": 310, "IFW": 1.15, "exposure": "C",
           "elements": [ {element 1}, {element 2}, ... ]   # top-to-bottom or any order
         }
 
@@ -516,7 +516,6 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     V_mph = V_kph * KPH_TO_MPH
     IFW = float(inputs["IFW"])
     exposure = str(inputs.get("exposure", "C")).upper()
-    apply_075 = bool(inputs.get("apply_075", False))
 
     g = {"V_kph": V_kph, "V_ms": V_ms, "V_mph": V_mph, "IFW": IFW,
          "exposure": exposure, "Q": Q_SI}
@@ -524,10 +523,11 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     elements = [_compute_element(el, g) for el in inputs.get("elements", [])]
 
     # --- assembly aggregate -------------------------------------------------
+    # MOP 113 wind is directional: FX and FY are applied to the model SEPARATELY
+    # (one principal direction at a time).  We do NOT combine them into a vector
+    # resultant -- that is not an Eq. 3-1 step.
     FX = sum(e["Fx"] for e in elements)
     FY = sum(e["Fy"] for e in elements)
-    FR_full = math.sqrt(FX ** 2 + FY ** 2)
-    FR = FR_full * (0.75 if apply_075 else 1.0)
 
     # Base shear = total wind force per direction (all elements act above base).
     base_shear_x, base_shear_y = FX, FY
@@ -539,7 +539,7 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     governing = "X = Y (symmetric)" if abs(FX - FY) < 1e-9 else \
         ("X" if FX >= FY else "Y")
 
-    assembly_steps = _assembly_steps(elements, FX, FY, FR_full, FR, apply_075,
+    assembly_steps = _assembly_steps(elements, FX, FY,
                                      base_shear_x, base_shear_y, Mx, My, governing)
 
     figures = _build_figures(elements, exposure, FX, FY, governing)
@@ -549,7 +549,7 @@ def calculate(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "note": DUAL_CONSTANT_NOTE,
         "elements": elements,
         "summary": {
-            "FX_kN": FX, "FY_kN": FY, "FR_kN": FR, "FR_kN_full": FR_full,
+            "FX_kN": FX, "FY_kN": FY,
             "governing": governing,
             "base_shear_x_kN": base_shear_x, "base_shear_y_kN": base_shear_y,
             "Mx_kNm": Mx, "My_kNm": My, "M_gov_kNm": M_gov,
@@ -714,7 +714,7 @@ def _element_steps(e: Dict[str, Any], g: Dict[str, Any]) -> List[Dict[str, Any]]
     return steps
 
 
-def _assembly_steps(elements, FX, FY, FR_full, FR, apply_075,
+def _assembly_steps(elements, FX, FY,
                     bsx, bsy, Mx, My, governing) -> List[Dict[str, Any]]:
     fx_terms = " + ".join(_f(e["Fx"], 3) for e in elements) or "0"
     fy_terms = " + ".join(_f(e["Fy"], 3) for e in elements) or "0"
@@ -723,15 +723,11 @@ def _assembly_steps(elements, FX, FY, FR_full, FR, apply_075,
             r"\text{Total } F_X = \sum F_{X,i} = " + fx_terms + r" = " + _f(FX, 3)
             + r"\ \text{kN}",
             r"\text{Total } F_Y = \sum F_{Y,i} = " + fy_terms + r" = " + _f(FY, 3)
-            + r"\ \text{kN}\quad(" + governing + r"\ \text{governs})",
+            + r"\ \text{kN}",
+            r"\text{(} F_X \text{ and } F_Y \text{ are applied to the model "
+            r"separately — directional wind, no vector resultant. } "
+            + governing + r"\text{ is the larger.)}",
         ]},
-        {"title": "Resultant", "lines": [
-            r"F_R = \sqrt{F_X^2 + F_Y^2} = \sqrt{" + _f(FX, 3) + r"^2 + "
-            + _f(FY, 3) + r"^2} = " + _f(FR_full, 3) + r"\ \text{kN}",
-        ] + ([r"\text{Apply 0.75 two-face factor: } F_R = 0.75 \times "
-              + _f(FR_full, 3) + r" = " + _f(FR, 3) + r"\ \text{kN}"]
-             if apply_075 else
-             [r"\text{(0.75 two-face factor OFF — full vector sum.)}"])},
         {"title": "Base shear &amp; overturning", "lines": [
             r"V_{base,X} = \sum F_{X,i} = " + _f(bsx, 3) + r"\ \text{kN},\quad "
             r"V_{base,Y} = " + _f(bsy, 3) + r"\ \text{kN}",
@@ -800,7 +796,7 @@ def _plinth(kz_height_mm, label="Plinth"):
 PRESETS = {
     "PI": {
         "label": "Preset 1 — Post Insulator (PI), circular + plinth",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "V_kph": 310, "IFW": 1.15, "exposure": "C",
         "elements": [
             {"label": "PI", "kind": "equipment_circular", "z_base_mm": 0,
              "z_tip_mm": 9189, "D_mm": 345, "cf": 0.9,
@@ -810,7 +806,7 @@ PRESETS = {
     },
     "CT": {
         "label": "Preset 2 — Current Transformer (CT), circular + plinth",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "V_kph": 310, "IFW": 1.15, "exposure": "C",
         "elements": [
             {"label": "CT", "kind": "equipment_circular", "z_base_mm": 0,
              "z_tip_mm": 10265, "D_mm": 440, "cf": 0.9,
@@ -820,7 +816,7 @@ PRESETS = {
     },
     "CB": {
         "label": "Preset 3 — Circuit Breaker (CB), rectangular + plinth",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "V_kph": 310, "IFW": 1.15, "exposure": "C",
         "elements": [
             {"label": "CB", "kind": "equipment_rectangular", "z_base_mm": 0,
              "z_tip_mm": 9336, "WX_mm": 2853.8, "WY_mm": 2353.1, "cf": 2.0,
@@ -830,7 +826,7 @@ PRESETS = {
     },
     "PI_STACK": {
         "label": "Preset 4 — PI on a 2 m lattice support (stacked)",
-        "V_kph": 310, "IFW": 1.15, "exposure": "C", "apply_075": False,
+        "V_kph": 310, "IFW": 1.15, "exposure": "C",
         "elements": [
             {"label": "PI", "kind": "equipment_circular", "z_base_mm": 2000,
              "z_tip_mm": 9189, "D_mm": 345, "cf": 0.9,

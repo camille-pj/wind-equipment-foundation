@@ -23,10 +23,11 @@ def rel_close(actual, expected, tol=0.005):
 
 
 # ---- single-element regression presets (1-3) ----------------------------
+# FX and FY are reported separately (directional wind); no vector resultant.
 SINGLE_CASES = [
-    ("PI", {"Kz": 0.981, "qz_kpa": 5.13, "FX_kN": 13.65, "FY_kN": 13.65, "FR_kN": 19.30}),
-    ("CT", {"Kz": 1.002, "qz_kpa": 5.24, "FX_kN": 19.36, "FY_kN": 19.36, "FR_kN": 27.38}),
-    ("CB", {"Kz": 0.984, "qz_kpa": 5.14, "FX_kN": 234.3, "FY_kN": 193.4, "FR_kN": 303.8}),
+    ("PI", {"Kz": 0.981, "qz_kpa": 5.13, "FX_kN": 13.65, "FY_kN": 13.65}),
+    ("CT", {"Kz": 1.002, "qz_kpa": 5.24, "FX_kN": 19.36, "FY_kN": 19.36}),
+    ("CB", {"Kz": 0.984, "qz_kpa": 5.14, "FX_kN": 234.3, "FY_kN": 193.4}),
 ]
 
 
@@ -42,8 +43,8 @@ def test_single_presets(key, exp):
         f"{key} FX {res['summary']['FX_kN']} vs {exp['FX_kN']}"
     assert rel_close(res["summary"]["FY_kN"], exp["FY_kN"]), \
         f"{key} FY {res['summary']['FY_kN']} vs {exp['FY_kN']}"
-    assert rel_close(res["summary"]["FR_kN"], exp["FR_kN"]), \
-        f"{key} FR {res['summary']['FR_kN']} vs {exp['FR_kN']}"
+    # The resultant must NOT be produced (not an Eq. 3-1 step).
+    assert "FR_kN" not in res["summary"]
 
 
 def test_cb_governing():
@@ -70,9 +71,9 @@ def test_stacked_preset():
     assert rel_close(sup["extra"]["A_solid"], 0.20)
     assert rel_close(sup["Fx"], 2.31, tol=0.02)
 
-    # assembly
+    # assembly (FX/FY reported separately; no resultant)
     assert rel_close(res["summary"]["FX_kN"], 12.0, tol=0.02)
-    assert rel_close(res["summary"]["FR_kN"], 17.0, tol=0.02)
+    assert rel_close(res["summary"]["FY_kN"], 12.0, tol=0.02)
     assert rel_close(res["summary"]["M_gov_kNm"], 57.0, tol=0.03)
 
 
@@ -96,11 +97,13 @@ def test_table_3_7_aspect_ratio():
     assert aspect_ratio_c(50)["c"] == 1.0
 
 
-def test_075_toggle():
-    base = calculate(PRESETS["PI"])
-    factored = calculate({**PRESETS["PI"], "apply_075": True})
-    assert math.isclose(factored["summary"]["FR_kN"],
-                        0.75 * base["summary"]["FR_kN"], rel_tol=1e-9)
+def test_no_resultant_produced():
+    """The engine must not emit a vector resultant (FX/FY applied separately)."""
+    res = calculate(PRESETS["CB"])
+    assert "FR_kN" not in res["summary"]
+    assert "FR_kN_full" not in res["summary"]
+    titles = [s["title"] for s in res["assembly_steps"]]
+    assert not any("Resultant" in t for t in titles)
 
 
 def test_solidity_takeoff_matches_direct():
