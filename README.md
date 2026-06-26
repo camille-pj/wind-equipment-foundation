@@ -82,8 +82,9 @@ pytest -v
 | CB | rectangular + plinth | 0.984 | 5.14 | 234.3 | 193.4 | **303.8** (X governs) |
 | PI + 2 m lattice support | stacked (2 elements) | — | — | 12.0 | 12.0 | **17.0** (M ≈ 57 kN·m) |
 
-Presets 1–3 are single-equipment + plinth stacks from the project sheets; their US-derived targets
-are matched within ~0.1% by the SI-native engine. Preset 4 is a two-element stacking sanity check.
+Presets 1–4 are **illustrative sample inputs for demonstration only** (not validated project
+data). They exist to lock the engine arithmetic — the tabulated targets are the values the engine
+itself should reproduce, used as regression anchors so behaviour does not drift between changes.
 
 ## Seismic tab — Section 3.1.7 (NEHRP/FEMA 450 ELF)
 

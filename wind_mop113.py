@@ -322,7 +322,7 @@ def _compute_element(el: Dict[str, Any], g: Dict[str, Any]) -> Dict[str, Any]:
     #   "centroid" -> z_base + L/2              (less conservative; defensible)
     #   "custom"   -> explicit kz_height_mm     (evaluate at a controlling
     #                 reference height, e.g. a base plinth taken at the
-    #                 governing equipment height to match the project sheets)
+    #                 governing equipment height)
     kz_basis = str(el.get("kz_basis", "tip"))
     if kz_basis == "custom" and el.get("kz_height_mm") not in (None, ""):
         z_eff_m = float(el["kz_height_mm"]) * MM_TO_M
@@ -731,7 +731,7 @@ def _assembly_steps(elements, FX, FY, FR_full, FR, apply_075,
         ] + ([r"\text{Apply 0.75 two-face factor: } F_R = 0.75 \times "
               + _f(FR_full, 3) + r" = " + _f(FR, 3) + r"\ \text{kN}"]
              if apply_075 else
-             [r"\text{(0.75 two-face factor OFF — full vector sum per project sheets.)}"])},
+             [r"\text{(0.75 two-face factor OFF — full vector sum.)}"])},
         {"title": "Base shear &amp; overturning", "lines": [
             r"V_{base,X} = \sum F_{X,i} = " + _f(bsx, 3) + r"\ \text{kN},\quad "
             r"V_{base,Y} = " + _f(bsy, 3) + r"\ \text{kN}",
@@ -785,11 +785,12 @@ def _build_figures(elements, exposure, FX, FY, governing) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Worked-example presets (also surfaced in the UI)
+# Illustrative sample presets (also surfaced in the UI). These are sample
+# inputs for demonstration only -- not validated project data.
 # ---------------------------------------------------------------------------
 def _plinth(kz_height_mm, label="Plinth"):
-    # In the project's single-item PI/CT/CB sheets the base plinth was evaluated
-    # at the governing equipment height, so Kz uses a custom reference height.
+    # Sample plinth: Kz evaluated at a custom reference height (here the
+    # governing equipment height) via the custom-height basis.
     return {"label": label, "kind": "pedestal_plinth", "z_base_mm": 0,
             "width_mm": 700, "height_mm": 200, "cf": 2.0,
             "kz_basis": "custom", "kz_height_mm": kz_height_mm,

@@ -3,10 +3,11 @@ pytest validation of the SI-native stacked MOP 113 engine.
 
 Run with:  pytest -v
 
-Presets 1-3 are single-equipment + plinth stacks taken from the project sheets;
-their published targets were derived in US units, so the SI-native engine lands
-~0.1 % off -- still well inside the 0.5 % tolerance.  Preset 4 is a two-element
-stacking sanity check (PI on a 2 m lattice support).
+Presets 1-4 are illustrative sample inputs (for demonstration only, not
+validated project data). They serve purely as regression anchors that lock the
+engine arithmetic. The preset 1-3 targets were computed in US units, so the
+SI-native engine lands ~0.1 % off -- still well inside the 0.5 % tolerance.
+Preset 4 is a two-element stacking sanity check (equipment on a 2 m lattice).
 """
 
 import math
