@@ -66,6 +66,7 @@ createApp({
       error: null,
       loading: false,
       exporting: false,
+      calcPulse: false,
       _timer: null,
       // --- seismic ---
       seismicPresets: window.MOP113_SEISMIC_PRESETS,
@@ -94,6 +95,16 @@ createApp({
   mounted() { this.compute(); this.computeSeismic(); this.computeVconv(); },
 
   methods: {
+    /* ---------- explicit recalculate (visible loading) ---------- */
+    recalc() {
+      this.calcPulse = true;
+      const fn = this.activeTab === 'wind' ? this.compute
+        : this.activeTab === 'vconv' ? this.computeVconv : this.computeSeismic;
+      // keep the spinner visible briefly so the recompute is clearly seen
+      Promise.all([fn.call(this), new Promise(r => setTimeout(r, 450))])
+        .finally(() => { this.calcPulse = false; });
+    },
+
     /* ---------- tab switching ---------- */
     switchTab(tab) {
       this.activeTab = tab;
@@ -131,13 +142,48 @@ createApp({
     /* ---------- presets / stack management ---------- */
     loadPreset(key) { this.f = clone(this.presets[key]); },
 
+    // Physical height (mm) of an element, by kind.
+    _elemHeightMm(el) {
+      if (el.kind === 'equipment_circular' || el.kind === 'equipment_rectangular')
+        return (Number(el.z_tip_mm) || 0) - (Number(el.z_base_mm) || 0);
+      if (el.kind === 'pedestal_plinth') return Number(el.height_mm) || 0;
+      if (el.kind === 'lattice_truss')
+        return Number(el.route === 'A' ? el.face_height_mm : el.L_mm) || 0;
+      return 0;
+    },
+    // Shift an element vertically by dz (mm), keeping its own height.
+    _shiftElem(el, dz) {
+      el.z_base_mm = (Number(el.z_base_mm) || 0) + dz;
+      if (el.z_tip_mm != null) el.z_tip_mm = (Number(el.z_tip_mm) || 0) + dz;
+    },
+    // Current top-of-stack elevation (mm).
+    _stackTop() {
+      return this.f.elements.reduce(
+        (mx, el) => Math.max(mx, (Number(el.z_base_mm) || 0) + this._elemHeightMm(el)), 0);
+    },
+
     addElement() {
-      this.f.elements.push({
+      // New equipment sits ON TOP of the current stack (heights follow).
+      const top = this._stackTop();
+      this.f.elements.unshift({
         label: 'New equipment', kind: 'equipment_circular',
-        z_base_mm: 0, z_tip_mm: 3000, D_mm: 300, cf: 0.9,
+        z_base_mm: top, z_tip_mm: top + 3000, D_mm: 300, cf: 0.9,
         kz_basis: 'tip', grf_type: 'rigid',
       });
     },
+
+    // Re-seat every element so each sits on the one below it (no gaps/overlap).
+    // List is top→bottom, so we stack from the last (bottom) element up.
+    autoStack() {
+      let z = 0;
+      for (let i = this.f.elements.length - 1; i >= 0; i--) {
+        const el = this.f.elements[i];
+        const h = this._elemHeightMm(el);
+        this._shiftElem(el, z - (Number(el.z_base_mm) || 0));  // move base to z
+        z += h;
+      }
+    },
+
     removeElement(i) { this.f.elements.splice(i, 1); },
     move(i, d) {
       const j = i + d;
@@ -182,6 +228,14 @@ createApp({
       const h = Number(el.route === 'A' ? el.face_height_mm : el.L_mm) || 0;
       if (!h) { this.error = 'Set the panel height (face height / support height L) first.'; return; }
       const base = Number(el.z_base_mm) || 0;
+      const origTop = base + h;          // top of the single panel before expanding
+      const added = (n - 1) * h;          // extra height the stack now occupies
+      // Anything that was sitting on top of this panel moves up so it still sits
+      // on top of the expanded truss (heights follow).
+      this.f.elements.forEach((other, j) => {
+        if (j !== ei && (Number(other.z_base_mm) || 0) >= origTop - 1e-6)
+          this._shiftElem(other, added);
+      });
       const baseLabel = String(el.label || 'Truss').replace(/\s*P\d+$/, '');
       const copies = [];
       for (let i = 0; i < n; i++) {

@@ -79,18 +79,24 @@
   </nav>
 
   <div class="container-fluid px-3 px-lg-4">
-    <!-- ===== TAB NAV ===== -->
-    <ul class="nav nav-tabs mb-3 no-print">
-      <li class="nav-item">
-        <a class="nav-link" :class="{active: activeTab==='wind'}" href="#" @click.prevent="switchTab('wind')">Wind (Eq. 3-1)</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" :class="{active: activeTab==='vconv'}" href="#" @click.prevent="switchTab('vconv')">V: NSCP→MOP</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" :class="{active: activeTab==='seismic'}" href="#" @click.prevent="switchTab('seismic')">Seismic (NSCP 2015)</a>
-      </li>
-    </ul>
+    <!-- ===== TAB NAV + CALCULATE ===== -->
+    <div class="d-flex justify-content-between align-items-end mb-3 no-print">
+      <ul class="nav nav-tabs flex-grow-1">
+        <li class="nav-item">
+          <a class="nav-link" :class="{active: activeTab==='wind'}" href="#" @click.prevent="switchTab('wind')">Wind (Eq. 3-1)</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" :class="{active: activeTab==='vconv'}" href="#" @click.prevent="switchTab('vconv')">V: NSCP→MOP</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" :class="{active: activeTab==='seismic'}" href="#" @click.prevent="switchTab('seismic')">Seismic (NSCP 2015)</a>
+        </li>
+      </ul>
+      <button class="btn btn-success ms-2 mb-1" @click="recalc" :disabled="calcPulse" style="min-width:9.5rem">
+        <span v-if="calcPulse" class="spinner-border spinner-border-sm me-1"></span>
+        [[ calcPulse ? 'Calculating…' : '↻ Calculate' ]]
+      </button>
+    </div>
 
     <!-- ============================================================ -->
     <!-- ===================== WIND TAB PANE ======================== -->
@@ -212,11 +218,14 @@
         <!-- ELEMENT STACK -->
         <div class="d-flex justify-content-between align-items-center mb-2">
           <h5 class="mb-0">Element stack <small class="text-muted">(top → bottom)</small></h5>
-          <button class="btn btn-sm btn-success" @click="addElement">+ Add element</button>
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-success" @click="autoStack" title="Re-seat every element so each sits on the one below (no gaps/overlap)">⇅ Auto-stack heights</button>
+            <button class="btn btn-success" @click="addElement">+ Add on top</button>
+          </div>
         </div>
-        <div class="small-note text-muted mb-2">Foundation carries no wind and is excluded. Define whether the overall
-          tip height already includes the support, or the equipment sits on top of it — the tool derives
-          equipment length = tip − support height.</div>
+        <div class="small-note text-muted mb-2">Foundation carries no wind and is excluded. <strong>+ Add on top</strong>
+          places a new item above the stack; <strong>⇅ Auto-stack</strong> re-seats every element so each base = the top of
+          the one below (in list order, bottom = last). Equipment length = tip − base.</div>
 
         <div v-for="(el,ei) in f.elements" :key="ei" class="card mb-3 elem-card">
           <div class="card-header d-flex justify-content-between align-items-center py-2"
