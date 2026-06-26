@@ -33,20 +33,17 @@ const COMPANY = {
   email: 'albert@apeconsultancy.net',
   website: 'www.apeconsultancy.net',
 };
-const LOGO_VB = { w: 940, h: 108 };
 const LG = '#1f5130', LG_DARK = '#143a22';
-function apecLogoSVGMarkup(widthPx) {
-  const h = widthPx * (LOGO_VB.h / LOGO_VB.w);
+// Only the emblem (leaf mark) is rasterised; the wordmark is drawn with jsPDF
+// text so it can never clip regardless of the browser's SVG font rendering.
+const EMBLEM_VB = { w: 160, h: 108 };
+function apecEmblemSVGMarkup(widthPx) {
+  const h = widthPx * (EMBLEM_VB.h / EMBLEM_VB.w);
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${h}" viewBox="0 0 ${LOGO_VB.w} ${LOGO_VB.h}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${h}" viewBox="0 0 ${EMBLEM_VB.w} ${EMBLEM_VB.h}">` +
     `<path d="M14 100 C 64 90, 116 88, 150 94 C 116 102, 64 104, 14 100 Z" fill="${LG_DARK}"/>` +
     `<path d="M14 102 C 12 56, 62 22, 150 6 C 118 40, 94 70, 90 102 C 64 102, 38 102, 14 102 Z" fill="${LG}"/>` +
-    `<path d="M62 82 C 72 52, 94 32, 126 18 C 108 42, 94 60, 88 86 C 78 84, 70 84, 62 82 Z" fill="#ffffff"/>` +
-    `<text x="176" y="92" font-family="Georgia, 'Times New Roman', serif" font-weight="700" fill="${LG}" letter-spacing="0.5">` +
-    `<tspan font-size="34">A</tspan><tspan font-size="26">LBERT </tspan>` +
-    `<tspan font-size="34">P</tspan><tspan font-size="26">AMONAG </tspan>` +
-    `<tspan font-size="34">E</tspan><tspan font-size="26">NGINEERING </tspan>` +
-    `<tspan font-size="34">C</tspan><tspan font-size="26">ONSULTANCY</tspan></text></svg>`
+    `<path d="M62 82 C 72 52, 94 32, 126 18 C 108 42, 94 60, 88 86 C 78 84, 70 84, 62 82 Z" fill="#ffffff"/></svg>`
   );
 }
 
@@ -232,8 +229,8 @@ createApp({
       // Ground line (NGL).
       shapes.push({ type: 'line', x0: -halfMax, x1: halfMax, y0: 0, y1: 0,
         line: { color: GP.primary, width: 2, dash: 'dot' } });
-      annotations.push({ x: 0, y: 0, ax: 0, ay: 11, showarrow: false,
-        text: 'NGL', xanchor: 'center', font: { size: 9, color: GP.primary } });
+      annotations.push({ x: 0, y: 0, ax: 0, ay: 14, showarrow: false,
+        text: 'NGL', xanchor: 'center', font: { size: 12, color: GP.primary } });
 
       s.elements.forEach((e) => {
         const fill = fillByKind[e.kind] || 'rgba(106,168,79,0.22)';
@@ -243,33 +240,36 @@ createApp({
         const midY = (e.y0 + e.y1) / 2;
         // Info label OUTSIDE to the right, anchored by a fixed pixel offset so it
         // never overlaps the (often very narrow) element body or its neighbours.
-        annotations.push({ x: e.x1, y: midY, ax: 78, ay: 0, showarrow: true,
-          arrowhead: 2, arrowsize: 1, arrowwidth: 1, arrowcolor: '#b9c7bd',
+        annotations.push({ x: e.x1, y: midY, ax: 92, ay: 0, showarrow: true,
+          arrowhead: 2, arrowsize: 1, arrowwidth: 1.2, arrowcolor: '#9fb3a5',
           xanchor: 'left', align: 'left',
-          text: `<b>${e.label}</b><br><span style="font-size:9px">K<sub>z</sub>=${e.Kz} · F=${e.F} kN</span>`,
-          font: { size: 10, color: line }, bgcolor: 'rgba(255,255,255,0.82)' });
-        // Elevation tick on the left (small pixel offset, no overlap).
-        annotations.push({ x: e.x0, y: e.y1, ax: -6, ay: 0, showarrow: false,
-          xanchor: 'right', text: `${e.z_top} m`, font: { size: 8, color: '#6b7d70' } });
+          text: `<b>${e.label}</b><br><span style="font-size:11px">K<sub>z</sub>=${e.Kz} · F=${e.F} kN</span>`,
+          font: { size: 14, color: line }, bgcolor: 'rgba(255,255,255,0.85)',
+          borderpad: 2 });
+        // Elevation tick on the left (bigger, pixel offset, no overlap).
+        annotations.push({ x: e.x0, y: e.y1, ax: -8, ay: 0, showarrow: false,
+          xanchor: 'right', text: `${e.z_top} m`, font: { size: 11, color: '#52635a' } });
       });
       // base elevation of the lowest element
       const last = s.elements[s.elements.length - 1];
-      annotations.push({ x: last.x0, y: last.y0, ax: -6, ay: 0, showarrow: false,
-        xanchor: 'right', text: `${last.z_base} m`, font: { size: 8, color: '#6b7d70' } });
+      annotations.push({ x: last.x0, y: last.y0, ax: -8, ay: 0, showarrow: false,
+        xanchor: 'right', text: `${last.z_base} m`, font: { size: 11, color: '#52635a' } });
 
       // Wind arrow on the windward (left) side — pixel offset, plain text label.
       const wy = s.z_max * 0.62;
-      annotations.push({ x: -halfMax * 0.55, y: wy, ax: -46, ay: 0, showarrow: true,
-        arrowhead: 3, arrowsize: 1.5, arrowwidth: 2, arrowcolor: GP.light, text: '' });
-      annotations.push({ x: -halfMax * 0.55, y: wy, ax: -46, ay: -13, showarrow: false,
-        xanchor: 'left', text: 'WIND →', font: { size: 10, color: GP.mid } });
+      annotations.push({ x: -halfMax * 0.5, y: wy, ax: -52, ay: 0, showarrow: true,
+        arrowhead: 3, arrowsize: 1.8, arrowwidth: 2.4, arrowcolor: GP.light, text: '' });
+      annotations.push({ x: -halfMax * 0.5, y: wy, ax: -52, ay: -16, showarrow: false,
+        xanchor: 'left', text: 'WIND', font: { size: 13, color: GP.mid } });
 
       const layout = {
-        xaxis: { range: [-halfMax * 1.25, halfMax * 1.25], zeroline: false,
-                 scaleanchor: 'y', scaleratio: 1, title: 'm' },
-        yaxis: { range: [-s.z_max * 0.08, s.z_max * 1.12], title: 'm' },
+        // Axis titles omitted (units are in the caption); a rotated single-letter
+        // y-title is mangled by html2canvas in the PDF capture.
+        xaxis: { range: [-halfMax * 1.35, halfMax * 1.35], zeroline: false,
+                 scaleanchor: 'y', scaleratio: 1, ticksuffix: ' m' },
+        yaxis: { range: [-s.z_max * 0.08, s.z_max * 1.12], ticksuffix: ' m' },
         shapes, annotations, showlegend: false,
-        margin: { t: 20, r: 96, b: 40, l: 56 }, height: 440,
+        margin: { t: 20, r: 120, b: 40, l: 64 }, height: 480,
       };
       Plotly.react(this.$refs.figStack, [], layout, { responsive: true, displaylogo: false });
     },
@@ -468,14 +468,15 @@ createApp({
     },
 
     /* ================= PDF EXPORT (APEC letterhead) ================= */
-    // Rasterise the shared APEC logo SVG to a PNG data URL (crisp on every page).
+    // Rasterise just the APEC emblem (leaf mark) to a PNG data URL.
     async _rasteriseLogo() {
       try {
-        const widthPx = 1880;
-        const heightPx = Math.round(widthPx * (LOGO_VB.h / LOGO_VB.w));
+        const widthPx = 480;
+        const heightPx = Math.round(widthPx * (EMBLEM_VB.h / EMBLEM_VB.w));
         const url = 'data:image/svg+xml;charset=utf-8,' +
-          encodeURIComponent(apecLogoSVGMarkup(widthPx));
+          encodeURIComponent(apecEmblemSVGMarkup(widthPx));
         const img = new Image();
+        img.width = widthPx; img.height = heightPx;   // explicit size = reliable raster
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
         const c = document.createElement('canvas');
         c.width = widthPx; c.height = heightPx;
@@ -485,15 +486,18 @@ createApp({
     },
 
     _drawHeader(pdf, pageW, margin, logoPng, projectName) {
-      const GREEN = [34, 139, 34], GREEN_DARK = [20, 83, 45], GRAY = [150, 150, 150];
+      const GREEN = [34, 139, 34], LOGO_GREEN = [31, 81, 48], GRAY = [150, 150, 150];
+      let x = margin;
       if (logoPng) {
-        const logoH = 7, logoW = logoH * (LOGO_VB.w / LOGO_VB.h);
-        pdf.addImage(logoPng, 'PNG', margin, margin, logoW, logoH);
-      } else {
-        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11);
-        pdf.setTextColor(...GREEN_DARK);
-        pdf.text(COMPANY.reportTitle, margin, margin + 5);
+        const emH = 7, emW = emH * (EMBLEM_VB.w / EMBLEM_VB.h);  // ~10.4 mm wide
+        pdf.addImage(logoPng, 'PNG', margin, margin, emW, emH);
+        x = margin + emW + 2.5;
       }
+      // Wordmark drawn as real PDF text — measured & placed, so it never clips.
+      pdf.setFont('times', 'bold'); pdf.setFontSize(11);
+      pdf.setTextColor(...LOGO_GREEN);
+      pdf.text(COMPANY.nameUpper, x, margin + 5.4);
+
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY);
       pdf.text(projectName || '', pageW - margin, margin + 5.5, { align: 'right' });
       pdf.setDrawColor(...GREEN); pdf.setLineWidth(0.4);
