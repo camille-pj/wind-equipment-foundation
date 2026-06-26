@@ -46,15 +46,24 @@ createApp({
       serror: null,
       sloading: false,
       _stimer: null,
+      // --- V conversion (NSCP -> MOP) ---
+      vconvMeta: window.MOP113_VCONV_META,
+      vconvPresets: window.MOP113_VCONV_PRESETS,
+      vc: clone(window.MOP113_VCONV_PRESETS.MOP_50YR),
+      vresult: null,
+      verror: null,
+      vloading: false,
+      _vtimer: null,
     };
   },
 
   watch: {
     f: { handler() { this.scheduleCompute(); }, deep: true },
     s: { handler() { this.scheduleSeismic(); }, deep: true },
+    vc: { handler() { this.scheduleVconv(); }, deep: true },
   },
 
-  mounted() { this.compute(); this.computeSeismic(); },
+  mounted() { this.compute(); this.computeSeismic(); this.computeVconv(); },
 
   methods: {
     /* ---------- tab switching ---------- */
@@ -64,10 +73,12 @@ createApp({
       // laid out at zero width while the pane was display:none).
       this.$nextTick(() => {
         this.typeset();
-        const refs = tab === 'wind'
-          ? [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz]
-          : [this.$refs.figSpectrum, this.$refs.figSeisForce];
-        refs.forEach(el => el && window.Plotly && Plotly.Plots.resize(el));
+        const byTab = {
+          wind: [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz],
+          vconv: [this.$refs.figVconv],
+          seismic: [this.$refs.figSpectrum, this.$refs.figSeisForce],
+        };
+        (byTab[tab] || []).forEach(el => el && window.Plotly && Plotly.Plots.resize(el));
       });
     },
 
@@ -339,12 +350,67 @@ createApp({
       Plotly.react(this.$refs.figSeisForce, traces, layout, { responsive: true, displaylogo: false });
     },
 
+    /* ================= V CONVERSION (NSCP -> MOP) ================= */
+    vconvTag(key) { return key.replace('_', ' '); },
+    ifwInTable(v) { return this.vconvMeta.ifw.some(r => Math.abs(r.ifw - v) < 1e-9); },
+    loadVconvPreset(key) { this.vc = clone(this.vconvPresets[key]); },
+
+    scheduleVconv() {
+      this.vloading = true;
+      clearTimeout(this._vtimer);
+      this._vtimer = setTimeout(() => this.computeVconv(), 250);
+    },
+
+    async computeVconv() {
+      this.vloading = true;
+      try {
+        const resp = await fetch('/api/vconvert', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.vc),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { this.verror = data.error || 'Conversion error.'; }
+        else {
+          this.verror = null;
+          this.vresult = data;
+          await this.$nextTick();
+          this.typeset();
+          this.drawVconv(data.figures.speed_bar);
+        }
+      } catch (e) {
+        this.verror = 'Could not reach the conversion API: ' + e.message;
+      } finally { this.vloading = false; }
+    },
+
+    drawVconv(sb) {
+      const traces = [{
+        x: sb.labels, y: sb.kph, type: 'bar',
+        marker: { color: ['#6c757d', '#dc3545'] },
+        text: sb.kph.map((v, i) => `${v.toFixed(1)} kph<br>${sb.ms[i].toFixed(2)} m/s`),
+        textposition: 'auto',
+      }];
+      const layout = {
+        title: { text: 'NSCP 2015 vs MOP 113 basic wind speed', font: { size: 13 } },
+        yaxis: { title: 'V (kph)' },
+        margin: { t: 40, r: 10, b: 40, l: 55 }, height: 340, showlegend: false,
+      };
+      Plotly.react(this.$refs.figVconv, traces, layout, { responsive: true, displaylogo: false });
+    },
+
+    useVinWind() {
+      // Copy the converted MOP speed into the Wind tab and switch to it.
+      this.f.V_kph = Math.round(this.vresult.summary.V_mop_kph * 100) / 100;
+      this.switchTab('wind');
+    },
+
     /* ---------- print (active tab) ---------- */
     printReport() {
-      const refs = this.activeTab === 'wind'
-        ? [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz]
-        : [this.$refs.figSpectrum, this.$refs.figSeisForce];
-      refs.forEach(el => el && Plotly.Plots.resize(el));
+      const byTab = {
+        wind: [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz],
+        vconv: [this.$refs.figVconv],
+        seismic: [this.$refs.figSpectrum, this.$refs.figSeisForce],
+      };
+      (byTab[this.activeTab] || []).forEach(el => el && Plotly.Plots.resize(el));
       window.print();
     },
   },

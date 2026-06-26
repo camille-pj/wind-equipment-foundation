@@ -1,14 +1,18 @@
-# MOP 113 Load Calculator — Wind & Seismic
+# MOP 113 Load Calculator — Wind, V-conversion & Seismic
 
-A local web app with two tabs, both following **ASCE MOP 113 (2007)**, *Substation Structure
+A local web app with three tabs, all following **ASCE MOP 113 (2007)**, *Substation Structure
 Design Guide*:
 
 - **Wind (Eq. 3-1)** — wind load on a **stacked substation assembly** (main equipment on a steel
   lattice support on a foundation, + optional plinth), computed **SI-native**.
+- **V: NSCP→MOP** — converts an NSCP 2015 strength-level basic wind speed to the nominal speed
+  MOP 113 Eq. 3-1 expects, by equating the two codes' velocity pressures:
+  `V_MOP = V_NSCP·√(Kzt·Kd/(LF·IFW))` (defaults Kzt=Kd=1 → `V_NSCP/√(1.6·IFW)`). One click feeds
+  the result into the Wind tab. Validated against a worked NSCP→TIA-222 report (75.83→64.27 m/s).
 - **Seismic (Eq. 3-10)** — simplified NEHRP/FEMA 450 equivalent-lateral-force seismic design per
   **Section 3.1.7** (ASCE 7 spectral framework).
 
-Both tabs share the same stack (pure-Python engine = source of truth, Flask API, Vue 3 reactive
+All tabs share the same stack (pure-Python engine = source of truth, Flask API, Vue 3 reactive
 form, MathJax report, Plotly figures) and switch via Bootstrap `nav-tabs`, each preserving its own state.
 
 ## Wind tab — Eq. 3-1 (SI form)
@@ -116,8 +120,10 @@ FE  = (Sa/R)·W_eff·IFE·IMV     (3-10)              T0 = SD1/SDS
 ├── app.py                  # Flask: serves index, exposes /api/calculate + /api/seismic
 ├── wind_mop113.py          # Pure-Python SI-native wind engine (tables, lookups, stacked calc)
 ├── seismic_mop113.py       # Pure-Python seismic engine (§3.1.7 ELF, Tables 3-12/3-13, R/IFE/IMV)
+├── vconv_mop113.py         # Pure-Python NSCP 2015 → MOP 113 basic-wind-speed conversion
 ├── test_wind_mop113.py     # pytest: 4 wind presets + table logic
 ├── test_seismic_mop113.py  # pytest: 3 seismic presets + table logic
+├── test_vconv_mop113.py    # pytest: NSCP→MOP conversion (reproduces the report's 64.27 m/s)
 ├── requirements.txt
 ├── templates/index.html    # nav-tabs shell + Wind & Seismic panes (Bootstrap/Vue/MathJax/Plotly)
 └── static/app.js           # Vue app: both tabs' state, APIs, MathJax, Plotly

@@ -20,6 +20,10 @@ from seismic_mop113 import (
     R_TABLE, IFE_TABLE, IMV_TABLE,
     SITE_F_WARNING, R_GT3_NOTE, HAZARD_NOTE,
 )
+from vconv_mop113 import (
+    convert_v, PRESETS as VCONV_PRESETS,
+    IFW_TABLE as VCONV_IFW_TABLE, DEFAULT_LOAD_FACTOR, METHOD_NOTE,
+)
 
 app = Flask(__name__)
 
@@ -49,9 +53,14 @@ def index():
         "site_f_warning": SITE_F_WARNING, "r_gt3": R_GT3_NOTE,
         "hazard_note": HAZARD_NOTE,
     }
+    vconv_meta = {
+        "ifw": VCONV_IFW_TABLE, "default_lf": DEFAULT_LOAD_FACTOR,
+        "note": METHOD_NOTE,
+    }
     return render_template("index.html", tables=tables, presets=PRESETS,
                            seismic_tables=seismic_tables,
-                           seismic_presets=SEISMIC_PRESETS)
+                           seismic_presets=SEISMIC_PRESETS,
+                           vconv_meta=vconv_meta, vconv_presets=VCONV_PRESETS)
 
 
 def _num(val):
@@ -167,6 +176,25 @@ def api_seismic():
         result = calculate_seismic(data)
     except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"error": f"Calculation failed: {exc}"}), 400
+    return jsonify(result)
+
+
+@app.route("/api/vconvert", methods=["POST"])
+def api_vconvert():
+    """Validate the NSCP->MOP wind-speed conversion inputs and return result."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+    if _num(data.get("V_nscp_kph")) is None or _num(data.get("V_nscp_kph")) <= 0:
+        return jsonify({"error": "NSCP basic wind speed must be positive."}), 400
+    for k in ("load_factor", "IFW"):
+        v = _num(data.get(k))
+        if v is not None and v <= 0:
+            return jsonify({"error": f"'{k}' must be positive."}), 400
+    try:
+        result = convert_v(data)
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"error": f"Conversion failed: {exc}"}), 400
     return jsonify(result)
 
 

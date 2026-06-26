@@ -60,6 +60,9 @@
         <a class="nav-link" :class="{active: activeTab==='wind'}" href="#" @click.prevent="switchTab('wind')">Wind (Eq. 3-1)</a>
       </li>
       <li class="nav-item">
+        <a class="nav-link" :class="{active: activeTab==='vconv'}" href="#" @click.prevent="switchTab('vconv')">V: NSCP→MOP</a>
+      </li>
+      <li class="nav-item">
         <a class="nav-link" :class="{active: activeTab==='seismic'}" href="#" @click.prevent="switchTab('seismic')">Seismic (Eq. 3-10)</a>
       </li>
     </ul>
@@ -516,6 +519,125 @@
     </div><!-- /wind pane -->
 
     <!-- ============================================================ -->
+    <!-- ============== NSCP -> MOP V CONVERSION PANE =============== -->
+    <!-- ============================================================ -->
+    <div v-show="activeTab==='vconv'">
+      <div class="alert alert-secondary py-2 small-note mb-3">
+        <strong>NSCP 2015 → ASCE MOP 113 basic wind speed.</strong> Converts the NSCP 2015
+        strength-level 3-s gust speed to the nominal speed MOP 113 Eq. 3-1 expects, by equating the
+        two codes' velocity pressures (same method as a NSCP→TIA-222 conversion). Verify the load
+        factor, importance factor and any K<sub>zt</sub>/K<sub>d</sub> against the governing reference.
+      </div>
+
+      <div class="row g-4">
+        <!-- LEFT: inputs -->
+        <div class="col-lg-5">
+          <div class="card mb-3">
+            <div class="card-body py-2 d-flex gap-2 flex-wrap align-items-center">
+              <span class="fw-bold me-1">Load example:</span>
+              <button v-for="(p,key) in vconvPresets" :key="key" class="btn btn-sm btn-outline-primary"
+                      @click="loadVconvPreset(key)" :title="p.label">[[ vconvTag(key) ]]</button>
+            </div>
+          </div>
+
+          <div class="card mb-3">
+            <div class="card-header fw-bold bg-primary text-white py-2">Inputs</div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label class="form-label">Tag</label>
+                <input class="form-control" v-model="vc.tag">
+              </div>
+              <div class="mb-3">
+                <label class="form-label">NSCP 2015 basic wind speed V (kph)</label>
+                <input type="number" class="form-control" v-model.number="vc.V_nscp_kph">
+                <div class="form-text ref-cap">Strength-level 3-s gust (NSCP 2015 Fig. 207A.5-1)
+                  <span v-if="vresult">→ [[ vresult.inputs_echo.V_nscp_ms.toFixed(2) ]] m/s</span></div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Wind load factor LF</label>
+                <input type="number" step="0.05" class="form-control" v-model.number="vc.load_factor">
+                <div class="form-text ref-cap">LRFD wind load factor — converts NSCP ultimate → MOP service level (default 1.6)</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Importance factor I<sub>FW</sub> (MOP Table 3-3)</label>
+                <select class="form-select" v-model.number="vc.IFW">
+                  <option v-for="(r,i) in vconvMeta.ifw" :key="i" :value="r.ifw">[[ r.label ]] → [[ r.ifw.toFixed(2) ]]</option>
+                  <option :value="vc.IFW" v-if="!ifwInTable(vc.IFW)">custom → [[ Number(vc.IFW).toFixed(2) ]]</option>
+                </select>
+                <div class="form-text ref-cap">Sits inside the MOP velocity pressure; higher I<sub>FW</sub> → lower equivalent V.</div>
+              </div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label">K<sub>zt</sub> (carry, opt.)</label>
+                  <input type="number" step="0.05" class="form-control form-control-sm" v-model.number="vc.Kzt">
+                </div>
+                <div class="col-6">
+                  <label class="form-label">K<sub>d</sub> (carry, opt.)</label>
+                  <input type="number" step="0.05" class="form-control form-control-sm" v-model.number="vc.Kd">
+                </div>
+                <div class="form-text ref-cap small-note">MOP 113 Eq. 3-1 has no K<sub>zt</sub>/K<sub>d</sub>; leave at 1.0 unless you are deliberately carrying the NSCP values.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card mb-3">
+            <div class="card-body small-note">
+              <details>
+                <summary class="fw-semibold" style="cursor:pointer">Method note</summary>
+                <div class="mt-2">[[ vconvMeta.note ]]</div>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: report + figure -->
+        <div class="col-lg-7">
+          <div class="sticky-col">
+            <div class="d-flex justify-content-between align-items-center mb-2 no-print">
+              <h4 class="mb-0">Conversion</h4>
+              <div>
+                <span v-if="vloading" class="spinner-border spinner-border-sm text-primary me-2"></span>
+                <button class="btn btn-sm btn-dark" @click="printReport">🖨 Print / Export PDF</button>
+              </div>
+            </div>
+
+            <div v-if="verror" class="alert alert-danger">[[ verror ]]</div>
+
+            <div class="card summary-card mb-3" v-if="vresult">
+              <div class="card-header fw-bold py-2">Summary — [[ vresult.inputs_echo.tag ]]</div>
+              <div class="card-body">
+                <div class="row text-center g-2 align-items-center">
+                  <div class="col"><div class="text-muted small">NSCP V</div><div class="val">[[ vresult.summary.V_nscp_kph.toFixed(1) ]]</div><div class="small">kph ([[ vresult.summary.V_nscp_ms.toFixed(2) ]] m/s)</div></div>
+                  <div class="col-auto"><div class="val text-muted">→</div></div>
+                  <div class="col"><div class="text-muted small">MOP 113 V</div><div class="val text-danger">[[ vresult.summary.V_mop_kph.toFixed(1) ]]</div><div class="small">kph ([[ vresult.summary.V_mop_ms.toFixed(2) ]] m/s)</div></div>
+                </div>
+                <div class="text-center mt-2">
+                  <span class="small text-muted me-2">ratio = [[ vresult.summary.ratio.toFixed(4) ]]</span>
+                  <button class="btn btn-sm btn-outline-success" @click="useVinWind">Use [[ vresult.summary.V_mop_kph.toFixed(1) ]] kph in Wind tab →</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="card mb-3" v-if="vresult">
+              <div class="card-header fw-bold py-2">Speed comparison</div>
+              <div class="card-body"><div ref="figVconv" class="figure-box"></div></div>
+            </div>
+
+            <div class="card mb-3" v-if="vresult">
+              <div class="card-header fw-bold py-2">Step-by-step report</div>
+              <div class="card-body" ref="vreport">
+                <div v-for="step in vresult.steps" :key="step.n" class="report-step">
+                  <h6>Step [[ step.n ]] — <span v-html="step.title"></span></h6>
+                  <div v-for="(line,i) in step.lines" :key="i" class="mjx-line">$$ [[ line ]] $$</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /vconv pane -->
+
+    <!-- ============================================================ -->
     <!-- ==================== SEISMIC TAB PANE ====================== -->
     <!-- ============================================================ -->
     <div v-show="activeTab==='seismic'">
@@ -758,6 +880,8 @@
   window.MOP113_PRESETS = {{ presets | tojson }};
   window.MOP113_SEISMIC_TABLES  = {{ seismic_tables | tojson }};
   window.MOP113_SEISMIC_PRESETS = {{ seismic_presets | tojson }};
+  window.MOP113_VCONV_META    = {{ vconv_meta | tojson }};
+  window.MOP113_VCONV_PRESETS = {{ vconv_presets | tojson }};
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
