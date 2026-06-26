@@ -396,6 +396,20 @@
                   <div class="small-note">C<sub>f</sub> = c · 1.6 (Table 3-9 "structural shapes, average"); round → c · 0.9 (circular).</div>
                 </div>
               </div>
+
+              <!-- Multi-panel: replicate this single panel into N stacked elements -->
+              <div class="border-top pt-2 mt-2">
+                <label class="form-label small-note mb-1">Multi-panel truss — stack identical panels at once</label>
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text">N panels</span>
+                  <input type="number" min="2" max="20" class="form-control" v-model.number="el.panel_count">
+                  <button class="btn btn-outline-success" @click="stackPanels(ei)" title="Expand into N stacked panels">Stack ×N ↑</button>
+                </div>
+                <div class="form-text small-note ref-cap">Define <strong>one panel</strong> above (panel height =
+                  [[ el.route==='A' ? 'face height' : 'support height L' ]]), then expand: this row becomes N lattice
+                  elements stacked from z<sub>base</sub> upward, each evaluated at <em>its own</em> K<sub>z</sub>/height,
+                  with per-panel F and base shear/moment. Counts one windward face only.</div>
+              </div>
             </div>
 
             <!-- Cf (equipment/plinth) -->

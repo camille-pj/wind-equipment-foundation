@@ -170,7 +170,28 @@ createApp({
         if (!el.cross_section) el.cross_section = 'square';
         if (!el.member_type) el.member_type = 'flat';
         if (!el.members) el.members = [{ b_mm: 90, L_mm: 2000, n: 4, shape: 'flat' }];
+        if (!el.panel_count) el.panel_count = 5;
       }
+    },
+
+    // Replicate one lattice panel into N stacked lattice elements, each sitting
+    // a panel-height above the last so each is evaluated at its own Kz/height.
+    stackPanels(ei) {
+      const el = this.f.elements[ei];
+      const n = Math.max(2, Math.min(20, parseInt(el.panel_count, 10) || 5));
+      const h = Number(el.route === 'A' ? el.face_height_mm : el.L_mm) || 0;
+      if (!h) { this.error = 'Set the panel height (face height / support height L) first.'; return; }
+      const base = Number(el.z_base_mm) || 0;
+      const baseLabel = String(el.label || 'Truss').replace(/\s*P\d+$/, '');
+      const copies = [];
+      for (let i = 0; i < n; i++) {
+        const c = clone(el);
+        delete c.panel_count;
+        c.z_base_mm = base + i * h;
+        c.label = `${baseLabel} P${i + 1}`;
+        copies.push(c);
+      }
+      this.f.elements.splice(ei, 1, ...copies);
     },
 
     /* ---------- debounced API ---------- */
