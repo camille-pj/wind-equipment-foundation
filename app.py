@@ -9,16 +9,13 @@ validates input and marshals JSON.
 from flask import Flask, render_template, request, jsonify
 
 from wind_mop113 import (
-    calculate, PRESETS, DUAL_CONSTANT_NOTE, Q_SI, Q_US,
+    calculate, PRESETS, Q_SI, Q_US,
     TABLE_3_1, TABLE_3_1_HEIGHTS, TABLE_3_2, TABLE_3_3,
     TABLE_3_4A, TABLE_3_4B, TABLE_3_7, TABLE_3_8_ROWS, TABLE_3_9,
     TABLE_3_10_ROWS,
 )
-from seismic_mop113 import (
-    calculate_seismic, PRESETS as SEISMIC_PRESETS,
-    FA_SS_ANCHORS, TABLE_3_12, FV_S1_ANCHORS, TABLE_3_13,
-    R_TABLE, IFE_TABLE, IMV_TABLE,
-    SITE_F_WARNING, R_GT3_NOTE, HAZARD_NOTE,
+from nscp2015_seismic import (
+    calculate_nscp, PRESETS as SEISMIC_PRESETS,
 )
 from vconv_mop113 import (
     convert_v, PRESETS as VCONV_PRESETS,
@@ -42,23 +39,13 @@ def index():
         "t38": TABLE_3_8_ROWS,
         "t39": TABLE_3_9,
         "t310": TABLE_3_10_ROWS,
-        "q_si": Q_SI, "q_us": Q_US, "note": DUAL_CONSTANT_NOTE,
-    }
-    seismic_tables = {
-        "t312": {"anchors": FA_SS_ANCHORS,
-                 "rows": {k: v for k, v in TABLE_3_12.items()}},
-        "t313": {"anchors": FV_S1_ANCHORS,
-                 "rows": {k: v for k, v in TABLE_3_13.items()}},
-        "rtable": R_TABLE, "ife": IFE_TABLE, "imv": IMV_TABLE,
-        "site_f_warning": SITE_F_WARNING, "r_gt3": R_GT3_NOTE,
-        "hazard_note": HAZARD_NOTE,
+        "q_si": Q_SI, "q_us": Q_US,
     }
     vconv_meta = {
         "ifw": VCONV_IFW_TABLE, "default_lf": DEFAULT_LOAD_FACTOR,
         "note": METHOD_NOTE,
     }
     return render_template("index.html", tables=tables, presets=PRESETS,
-                           seismic_tables=seismic_tables,
                            seismic_presets=SEISMIC_PRESETS,
                            vconv_meta=vconv_meta, vconv_presets=VCONV_PRESETS)
 
@@ -145,35 +132,31 @@ def api_calculate():
 
 
 def _validate_seismic(data):
-    """Return an error string, or None if the seismic payload is usable."""
+    """Return an error string, or None if the NSCP seismic payload is usable."""
     if not isinstance(data, dict):
         return "Request body must be a JSON object."
-    for key in ("Ss", "S1", "T", "W_kN", "IFE"):
-        if _num(data.get(key)) is None:
-            return f"Seismic '{key}' must be a number."
-    if _num(data.get("Ss")) < 0 or _num(data.get("S1")) < 0:
-        return "Ss and S1 must be non-negative (g)."
-    if _num(data.get("T")) <= 0:
-        return "Period T must be positive."
-    if _num(data.get("W_kN")) <= 0:
-        return "Dead load W must be positive."
-    if str(data.get("site_class", "D")).upper() == "F":
-        for k in ("Fa_manual", "Fv_manual"):
-            if _num(data.get(k)) is None or _num(data.get(k)) <= 0:
-                return ("Site Class F requires manual Fa and Fv (positive "
-                        "numbers) — see the FEMA 450 note.")
+    if int(data.get("zone", 4)) not in (2, 4):
+        return "Seismic zone must be 2 or 4."
+    if str(data.get("soil_type", "sd")).lower() not in (
+            "sa", "sb", "sc", "sd", "se"):
+        return "Soil profile must be one of S_A … S_E."
+    for key in ("hn", "weight", "response_modification", "importance_factor"):
+        if _num(data.get(key)) is None or _num(data.get(key)) <= 0:
+            return f"Seismic '{key}' must be a positive number."
+    if _num(data.get("distance")) is None or _num(data.get("distance")) < 0:
+        return "Distance to source must be non-negative."
     return None
 
 
 @app.route("/api/seismic", methods=["POST"])
 def api_seismic():
-    """Validate the posted seismic inputs and return the full result."""
+    """Validate the posted NSCP 2015 seismic inputs and return the result."""
     data = request.get_json(silent=True)
     err = _validate_seismic(data)
     if err:
         return jsonify({"error": err}), 400
     try:
-        result = calculate_seismic(data)
+        result = calculate_nscp(data)
     except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"error": f"Calculation failed: {exc}"}), 400
     return jsonify(result)

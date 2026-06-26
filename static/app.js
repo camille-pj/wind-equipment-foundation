@@ -39,9 +39,8 @@ createApp({
       loading: false,
       _timer: null,
       // --- seismic ---
-      seismicTables: window.MOP113_SEISMIC_TABLES,
       seismicPresets: window.MOP113_SEISMIC_PRESETS,
-      s: clone(window.MOP113_SEISMIC_PRESETS.S1),
+      s: clone(window.MOP113_SEISMIC_PRESETS.Z4_SMRF),
       sresult: null,
       serror: null,
       sloading: false,
@@ -76,7 +75,7 @@ createApp({
         const byTab = {
           wind: [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz],
           vconv: [this.$refs.figVconv],
-          seismic: [this.$refs.figSpectrum, this.$refs.figSeisForce],
+          seismic: [this.$refs.figSpectrum, this.$refs.figADRS],
         };
         (byTab[tab] || []).forEach(el => el && window.Plotly && Plotly.Plots.resize(el));
       });
@@ -308,46 +307,70 @@ createApp({
     drawSeismicFigures() {
       const fig = this.sresult.figures;
       this.drawSpectrum(fig.spectrum);
-      this.drawSeisForce(fig.force_bar);
+      this.drawADRS(fig.adrs);
     },
 
     drawSpectrum(sp) {
+      // NSCP design response spectrum: Sa vs actual period T, + 1.4x envelope.
       const traces = [
         { x: sp.T, y: sp.Sa, mode: 'lines', name: 'Design spectrum',
           line: { color: '#0d6efd', width: 2 } },
+        { x: sp.T, y: sp.Sa_14, mode: 'lines', name: '1.4× (TH reference)',
+          line: { color: '#adb5bd', width: 1, dash: 'dash' } },
         { x: [sp.struct_T], y: [sp.struct_Sa], mode: 'markers',
           name: 'Structure (T, Sₐ)',
           marker: { color: '#dc3545', size: 14, symbol: 'star' } },
       ];
       const layout = {
-        title: { text: `Design response spectrum — S<sub>DS</sub>=${sp.SDS.toFixed(3)} g, ` +
-                       `T₀=${sp.T0.toFixed(3)} s`, font: { size: 13 } },
+        title: { text: `NSCP design spectrum — S<sub>a,max</sub>=${sp.sa_max.toFixed(3)} g, ` +
+                       `T₀=${sp.T0.toFixed(3)} s, Tₛ=${sp.Ts.toFixed(3)} s`, font: { size: 13 } },
         xaxis: { title: 'Period T (s)' }, yaxis: { title: 'Sₐ (g)', rangemode: 'tozero' },
         margin: { t: 40, r: 10, b: 50, l: 55 }, height: 340,
-        legend: { orientation: 'h', y: -0.25 },
-        shapes: [{ type: 'line', x0: sp.T0, x1: sp.T0, y0: 0, y1: sp.SDS,
-                   line: { color: '#6c757d', width: 1, dash: 'dot' } }],
-        annotations: [{ x: sp.T0, y: sp.SDS, text: `T₀=${sp.T0.toFixed(3)} s`,
-                        showarrow: true, arrowhead: 3, ax: 30, ay: -25, font: { size: 10 } },
-                      { x: sp.struct_T, y: sp.struct_Sa, ax: 35, ay: -35, arrowhead: 3,
-                        showarrow: true, font: { color: '#dc3545', size: 10 },
-                        text: `(${sp.struct_T.toFixed(2)}, ${sp.struct_Sa.toFixed(3)})` }],
+        legend: { orientation: 'h', y: -0.28 },
+        shapes: [
+          { type: 'line', x0: sp.T0, x1: sp.T0, y0: 0, y1: sp.sa_max,
+            line: { color: '#6c757d', width: 1, dash: 'dot' } },
+          { type: 'line', x0: sp.Ts, x1: sp.Ts, y0: 0, y1: sp.sa_max,
+            line: { color: '#6c757d', width: 1, dash: 'dot' } },
+        ],
+        annotations: [
+          { x: sp.Ts, y: sp.sa_max, text: `Tₛ=${sp.Ts.toFixed(3)}`, showarrow: true,
+            arrowhead: 3, ax: 30, ay: -22, font: { size: 10 } },
+          { x: sp.struct_T, y: sp.struct_Sa, ax: 35, ay: -35, arrowhead: 3,
+            showarrow: true, font: { color: '#dc3545', size: 10 },
+            text: `(${sp.struct_T.toFixed(2)}, ${sp.struct_Sa.toFixed(3)})` },
+        ],
       };
       Plotly.react(this.$refs.figSpectrum, traces, layout, { responsive: true, displaylogo: false });
     },
 
-    drawSeisForce(fb) {
-      const traces = [{
-        x: fb.labels, y: fb.values, type: 'bar',
-        marker: { color: ['#dc3545', '#fd7e14'] },
-        text: fb.values.map(v => v.toFixed(2)), textposition: 'auto',
-      }];
+    drawADRS(ad) {
+      const traces = [
+        { x: ad.Sd, y: ad.Sa, mode: 'lines', name: 'Elastic ADRS',
+          line: { color: '#0d6efd', width: 2 } },
+      ];
+      // radial constant-period lines
+      ad.radial.forEach(rl => {
+        traces.push({ x: rl.x, y: rl.y, mode: 'lines', name: `T=${rl.T}s`,
+          line: { color: '#dee2e6', width: 1 }, hoverinfo: 'name', showlegend: false });
+      });
+      if (ad.reduced) {
+        traces.push({ x: ad.reduced.Sd, y: ad.reduced.Sa, mode: 'lines',
+          name: 'Reduced ADRS (ATC-40)', line: { color: '#20c997', width: 2, dash: 'dot' } });
+        if (ad.reduced.apn != null) {
+          traces.push({ x: [ad.reduced.dpi], y: [ad.reduced.apn], mode: 'markers',
+            name: 'Performance point',
+            marker: { color: '#dc3545', size: 13, symbol: 'star' } });
+        }
+      }
       const layout = {
-        title: { text: 'Seismic force (kN)', font: { size: 13 } },
-        yaxis: { title: 'Force (kN)' },
-        margin: { t: 40, r: 10, b: 40, l: 55 }, height: 340, showlegend: false,
+        title: { text: 'ADRS — Sₐ vs S_d', font: { size: 13 } },
+        xaxis: { title: 'Spectral displacement S_d (m)', rangemode: 'tozero' },
+        yaxis: { title: 'Sₐ (g)', rangemode: 'tozero' },
+        margin: { t: 40, r: 10, b: 50, l: 55 }, height: 360,
+        legend: { orientation: 'h', y: -0.25 },
       };
-      Plotly.react(this.$refs.figSeisForce, traces, layout, { responsive: true, displaylogo: false });
+      Plotly.react(this.$refs.figADRS, traces, layout, { responsive: true, displaylogo: false });
     },
 
     /* ================= V CONVERSION (NSCP -> MOP) ================= */
@@ -408,7 +431,7 @@ createApp({
       const byTab = {
         wind: [this.$refs.figStack, this.$refs.figForce, this.$refs.figKz],
         vconv: [this.$refs.figVconv],
-        seismic: [this.$refs.figSpectrum, this.$refs.figSeisForce],
+        seismic: [this.$refs.figSpectrum, this.$refs.figADRS],
       };
       (byTab[this.activeTab] || []).forEach(el => el && Plotly.Plots.resize(el));
       window.print();

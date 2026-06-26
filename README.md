@@ -9,8 +9,10 @@ Design Guide*:
   MOP 113 Eq. 3-1 expects, by equating the two codes' velocity pressures:
   `V_MOP = V_NSCP·√(Kzt·Kd/(LF·IFW))` (defaults Kzt=Kd=1 → `V_NSCP/√(1.6·IFW)`). One click feeds
   the result into the Wind tab. Validated against a worked NSCP→TIA-222 report (75.83→64.27 m/s).
-- **Seismic (Eq. 3-10)** — simplified NEHRP/FEMA 450 equivalent-lateral-force seismic design per
-  **Section 3.1.7** (ASCE 7 spectral framework).
+- **Seismic (NSCP 2015)** — NSCP 2015 Section 208 static force procedure (calculation ported from
+  [`apecseismicpy`](https://github.com/albertp16/seismicpy)): site coefficients (Tables 208-4…208-8)
+  → structural period → design response spectrum → ADRS with ATC-40 reduction → base shear
+  (Eq. 208-8…208-11) → redundancy factor ρ.
 
 All tabs share the same stack (pure-Python engine = source of truth, Flask API, Vue 3 reactive
 form, MathJax report, Plotly figures) and switch via Bootstrap `nav-tabs`, each preserving its own state.
@@ -90,46 +92,51 @@ Presets 1–4 are **illustrative sample inputs for demonstration only** (not val
 data). They exist to lock the engine arithmetic — the tabulated targets are the values the engine
 itself should reproduce, used as regression anchors so behaviour does not drift between changes.
 
-## Seismic tab — Section 3.1.7 (NEHRP/FEMA 450 ELF)
+## Seismic tab — NSCP 2015 Section 208 (ported from apecseismicpy)
 
 ```
-SDS = (2/3)·Fa·Ss   (3-6)      Sa = SDS            if T ≤ T0   (3-8)
-SD1 = (2/3)·Fv·S1   (3-7)      Sa = SD1/T          if T > T0   (3-9)
-FE  = (Sa/R)·W_eff·IFE·IMV     (3-10)              T0 = SD1/SDS
+site coeffs (Na,Nv,Ca,Cv)  ->  T = Ct·hn^0.75  ->  Sa,max = 2.5·Ca, Ts = Cv/Sa,max
+   ->  ADRS: Sd = Sa·g·T²/(4π²), ATC-40 reduction (SRA, SRV)
+   ->  base shear  V = Cv·I/(R·T)·W           (208-8, design)
+                   V ≤ 2.5·Ca·I/R·W           (208-9, upper)
+                   V ≥ 0.11·Ca·I·W            (208-10, lower)
+                   V ≥ 0.8·Z·Nv·I/R·W (Z=0.4) (208-11, Zone-4 lower)
+   ->  redundancy  ρ = 2 − 6.1/(r_max·√AB),  clamped to [1.0, ρ_max]
 ```
 
-- `Ss`, `S1` are the 0.2-s / 1.0-s spectral accelerations (g) from a **site-specific PSHA**
-  (NSCP 2015 §208 is UBC-97-based and does *not* produce Ss/S1 — a separate method).
-- `Fa`, `Fv` are interpolated from site class + Ss/S1 (Tables 3-12, 3-13); Site Class F requires
-  manual values (site-specific study). `R` follows the USD/ASD basis (Sec 3.1.7.3).
-- `W_eff = W + 0.5·(attached wire weight)`. `Sa` is used as a seismic coefficient (fraction of g),
-  so `FE` comes out in kN directly — no conversion to m/s².
-- Vertical component: `a_vert = 0.8·Sa` (g); informational force `FE_vert = 0.8·Sa·W_eff·IFE`
-  **without** the R reduction (R is a lateral-ductility factor — deliberately *not* `0.8·FE`).
+- **Site coefficients** (Tables 208-4…208-8): Ca = Ca,table·Na, Cv = Cv,table·Nv, with near-source
+  Na/Nv interpolated by distance (Zone 4 only; Zone 2 takes the table value directly).
+- **Governing base shear** is the engineering-correct NSCP clamp
+  `V = max( min(208-8, 208-9), 208-10 [, 208-11 if Zone 4] )`. *(The ported `governingShear`
+  only covered Zone 4 and treated 208-11 as an upper cap; this is corrected here and noted in the
+  engine docstring.)*
+- **ADRS** shows the elastic spectrum with radial constant-period lines; supplying a capacity
+  curve (dy, ay, dpi, api + structure type A/B/C) adds the ATC-40 reduced spectrum and the
+  performance point.
 
-| Preset | Branch | Fa | Fv | SDS (g) | Sa (g) | FE (kN) |
-|---|---|---|---|---|---|---|
-| S1 | plateau (T ≤ T0) | 1.0 | 1.5 | 1.000 | 1.000 | **8.333** |
-| S2 | descending (T > T0) | 1.0 | 1.5 | 1.000 | 0.600 | **5.000** |
-| S3 | interpolation check | 1.30 | 1.90 | 0.542 | 0.542 | **2.708** |
+| Preset | Zone | Ca | Cv | T (s) | V governing (kN) |
+|---|---|---|---|---|---|
+| Z4_SMRF | 4 | 0.528 | 1.024 | 0.557 | **3465** |
+| Z2_STEEL | 2 | — | — | — | (no near-source / no 208-11) |
+| Z4_ADRS | 4 | 0.528 | 1.024 | 0.481 | with ATC-40 performance point |
 
 ## Project layout
 
 ```
 .
-├── app.py                  # Flask: serves index, exposes /api/calculate + /api/seismic
-├── wind_mop113.py          # Pure-Python SI-native wind engine (tables, lookups, stacked calc)
-├── seismic_mop113.py       # Pure-Python seismic engine (§3.1.7 ELF, Tables 3-12/3-13, R/IFE/IMV)
-├── vconv_mop113.py         # Pure-Python NSCP 2015 → MOP 113 basic-wind-speed conversion
-├── test_wind_mop113.py     # pytest: 4 wind presets + table logic
-├── test_seismic_mop113.py  # pytest: 3 seismic presets + table logic
-├── test_vconv_mop113.py    # pytest: NSCP→MOP conversion (reproduces the report's 64.27 m/s)
+├── app.py                     # Flask: serves index, exposes /api/calculate, /api/seismic, /api/vconvert
+├── wind_mop113.py             # Pure-Python SI-native wind engine (tables, lookups, stacked calc)
+├── nscp2015_seismic.py        # Pure-Python NSCP 2015 seismic engine (ported from apecseismicpy)
+├── vconv_mop113.py            # Pure-Python NSCP 2015 → MOP 113 basic-wind-speed conversion
+├── test_wind_mop113.py        # pytest: wind presets + table logic
+├── test_nscp2015_seismic.py   # pytest: NSCP seismic (site coeffs, base shear, redundancy, ADRS)
+├── test_vconv_mop113.py       # pytest: NSCP→MOP conversion (reproduces the report's 64.27 m/s)
 ├── requirements.txt
-├── templates/index.html    # nav-tabs shell + Wind & Seismic panes (Bootstrap/Vue/MathJax/Plotly)
-└── static/app.js           # Vue app: both tabs' state, APIs, MathJax, Plotly
+├── templates/index.html       # nav-tabs: Wind | V:NSCP→MOP | Seismic (Bootstrap/Vue/MathJax/Plotly)
+└── static/app.js              # Vue app: all tabs' state, APIs, MathJax, Plotly
 ```
 
 ---
 
-*Calculation per ASCE MOP 113 (2007): Wind Eq. 3-1 (SI form) and Seismic §3.1.7 (Eq. 3-10).
+*Wind per ASCE MOP 113 (2007) Eq. 3-1 (SI form); seismic per NSCP 2015 Section 208.
 Verify all table-driven selections against the governing project specification.*
