@@ -201,15 +201,23 @@ def compute_kz(h_ft: float, exposure: str) -> Dict[str, Any]:
 # GRF -- gust response factor lookup (Sec. 3.1.5.5)
 # ---------------------------------------------------------------------------
 def _band_lookup(table: List, h_ft: float, exposure: str) -> Dict[str, Any]:
+    """Banded step lookup (NOT interpolation): pick the row where the height
+    satisfies ``lower < h <= upper``.  ``ft = m * 3.28084`` is the only place
+    feet enter; both ft and the m-equivalent are reported in the band label."""
     exposure = exposure.upper()
     prev = 0
     for upper, row in table:
         if h_ft <= upper:
-            band = f"≤{upper} ft" if prev == 0 else f">{prev} to {upper} ft"
-            return {"grf": row[exposure], "band": band}
+            if prev == 0:
+                band = f"≤{upper} ft (≤{upper * 0.3048:.2f} m)"
+            else:
+                band = (f">{prev} to {upper} ft "
+                        f"(>{prev * 0.3048:.2f} to {upper * 0.3048:.2f} m)")
+            return {"grf": row[exposure], "band": band, "band_upper": upper}
         prev = upper
     upper, row = table[-1]
-    return {"grf": row[exposure], "band": f">{prev} ft (clamped to top band)"}
+    return {"grf": row[exposure],
+            "band": f">{prev} ft (clamped to top band)", "band_upper": upper}
 
 
 def compute_grf(grf_type: str, h_ft: float, exposure: str) -> Dict[str, Any]:
@@ -389,7 +397,24 @@ def _compute_element(el: Dict[str, Any], g: Dict[str, Any]) -> Dict[str, Any]:
             fw_m = float(el["face_width_mm"]) * MM_TO_M
             fh_m = float(el.get("face_height_mm", el.get("L_mm", 0))) * MM_TO_M
             Ag = fw_m * fh_m
-            phi = float(el["phi"])
+            # Solidity ratio: entered directly, or computed from a member
+            # take-off:  Phi = sum(b_i * L_i * n_i) / Ag.
+            phi_mode = str(el.get("phi_mode", "direct"))
+            solid_area: Optional[float] = None
+            takeoff: Optional[List[Dict[str, Any]]] = None
+            if phi_mode == "takeoff":
+                takeoff = []
+                solid_area = 0.0
+                for m in el.get("phi_members", []):
+                    bm = float(m["b_mm"]) * MM_TO_M
+                    Lm = float(m["L_mm"]) * MM_TO_M
+                    nm = float(m.get("n", 1))
+                    am = bm * Lm * nm
+                    solid_area += am
+                    takeoff.append({"b_m": bm, "L_m": Lm, "n": nm, "area": am})
+                phi = solid_area / Ag if Ag > 0 else 0.0
+            else:
+                phi = float(el["phi"])
             cross = str(el.get("cross_section", "square"))
             mtype = str(el.get("member_type", "flat"))
             cinfo = truss_cf_solidity(phi, cross, mtype)
@@ -408,7 +433,11 @@ def _compute_element(el: Dict[str, Any], g: Dict[str, Any]) -> Dict[str, Any]:
             zbar_m = z_base_m + fh_m / 2.0
             extra = {"route": "A", "face_w_m": fw_m, "face_h_m": fh_m,
                      "Ag": Ag, "phi": phi, "A_solid": A_solid,
-                     "cf_info": cinfo, "yawed": yawed}
+                     "cf_info": cinfo, "yawed": yawed,
+                     "phi_mode": phi_mode,
+                     "solid_area": (solid_area if solid_area is not None
+                                    else phi * Ag),
+                     "takeoff": takeoff}
         else:
             # --- Route B: member-by-member (no shielding credit). ---
             members = el.get("members", [])
@@ -633,10 +662,22 @@ def _element_steps(e: Dict[str, Any], g: Dict[str, Any]) -> List[Dict[str, Any]]
         lines = [
             r"\text{Gross face area } A_g = b_f \cdot h_f = " + _f(ex["face_w_m"], 3)
             + r" \times " + _f(ex["face_h_m"], 3) + r" = " + _f(ex["Ag"], 4)
-            + r"\ \text{m}^2,\quad \Phi = " + _f(ex["phi"], 3),
-            r"C_f\ (\text{Table 3-8, " + ci["cross_section"] + r", "
-            + ci["branch"] + r"}) = " + _f(ci["cf_flat"], 3),
+            + r"\ \text{m}^2",
         ]
+        # Show the solidity-ratio take-off when Phi was computed from members.
+        if ex.get("phi_mode") == "takeoff" and ex.get("takeoff"):
+            terms = " + ".join(
+                _f(t["b_m"], 3) + r"\times" + _f(t["L_m"], 3) + r"\times" + _f(t["n"], 0)
+                for t in ex["takeoff"])
+            lines.append(
+                r"\Phi = \dfrac{\sum b_i L_i n_i}{A_g} = \dfrac{" + terms + r"}{"
+                + _f(ex["Ag"], 4) + r"} = \dfrac{" + _f(ex["solid_area"], 4) + r"}{"
+                + _f(ex["Ag"], 4) + r"} = " + _f(ex["phi"], 3))
+        else:
+            lines.append(r"\Phi = " + _f(ex["phi"], 3) + r"\quad(\text{entered directly})")
+        lines.append(
+            r"C_f\ (\text{Table 3-8, " + ci["cross_section"] + r", "
+            + ci["branch"] + r"}) = " + _f(ci["cf_flat"], 3))
         if ci["cc"] is not None:
             lines.append(r"\text{Round members: } C_f = C_f \cdot C_c = "
                          + _f(ci["cf_flat"], 3) + r" \times " + _f(ci["cc"], 3)
@@ -795,9 +836,10 @@ PRESETS = {
              "kz_basis": "tip", "grf_type": "rigid"},
             {"label": "Steel support", "kind": "lattice_truss", "route": "A",
              "z_base_mm": 0, "face_width_mm": 500, "face_height_mm": 2000,
-             "L_mm": 2000, "phi": 0.20, "cross_section": "square",
-             "member_type": "flat", "yawed_wind": False,
-             "kz_basis": "tip", "grf_type": "rigid"},
+             "L_mm": 2000, "phi": 0.20, "phi_mode": "direct",
+             "phi_members": [{"b_mm": 90, "L_mm": 2000, "n": 4}],
+             "cross_section": "square", "member_type": "flat",
+             "yawed_wind": False, "kz_basis": "tip", "grf_type": "rigid"},
         ],
     },
 }

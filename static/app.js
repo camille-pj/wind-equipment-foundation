@@ -75,6 +75,17 @@ createApp({
     kindLabel(k) { return KIND_LABELS[k] || k; },
     presetTag(key) { return key.replace('_STACK', '+stack'); },
 
+    /* ---------- GRF band labels (Tables 3-4a/3-4b) ---------- */
+    band34ft(arr, i) {
+      const u = arr[i].upper;
+      return i === 0 ? `≤${u}` : `>${arr[i - 1].upper} to ${u}`;
+    },
+    band34m(arr, i) {
+      const m = (x) => (x * 0.3048).toFixed(2);
+      const u = arr[i].upper;
+      return i === 0 ? `≤${m(u)}` : `>${m(arr[i - 1].upper)} to ${m(u)}`;
+    },
+
     /* ---------- per-element result lookup (for live captions) ---------- */
     elResult(i) { return this.result ? this.result.elements[i] : null; },
 
@@ -115,6 +126,8 @@ createApp({
         if (!el.face_height_mm) el.face_height_mm = 2000;
         if (!el.L_mm) el.L_mm = 2000;
         if (el.phi === undefined) el.phi = 0.2;
+        if (!el.phi_mode) el.phi_mode = 'direct';
+        if (!el.phi_members) el.phi_members = [{ b_mm: 90, L_mm: 2000, n: 4 }];
         if (!el.cross_section) el.cross_section = 'square';
         if (!el.member_type) el.member_type = 'flat';
         if (!el.members) el.members = [{ b_mm: 90, L_mm: 2000, n: 4, shape: 'flat' }];

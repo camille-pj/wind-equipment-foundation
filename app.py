@@ -91,11 +91,22 @@ def _validate(data):
                     return f"{tag}: plinth {k} must be positive."
         elif kind == "lattice_truss":
             if el.get("route", "A") == "A":
-                for k in ("face_width_mm", "face_height_mm", "phi"):
+                for k in ("face_width_mm", "face_height_mm"):
                     if _num(el.get(k)) is None or _num(el.get(k)) <= 0:
                         return f"{tag}: Route A needs positive {k}."
-                if _num(el.get("phi")) > 1.0:
-                    return f"{tag}: solidity Φ must be ≤ 1.0."
+                if el.get("phi_mode") == "takeoff":
+                    pm = el.get("phi_members", [])
+                    if not pm:
+                        return f"{tag}: Φ take-off needs at least one member."
+                    for m in pm:
+                        for k in ("b_mm", "L_mm"):
+                            if _num(m.get(k)) is None or _num(m.get(k)) <= 0:
+                                return f"{tag}: Φ take-off member {k} must be positive."
+                else:
+                    if _num(el.get("phi")) is None or _num(el.get("phi")) <= 0:
+                        return f"{tag}: Route A needs a positive solidity Φ."
+                    if _num(el.get("phi")) > 1.0:
+                        return f"{tag}: solidity Φ must be ≤ 1.0."
             else:
                 members = el.get("members", [])
                 if not members:

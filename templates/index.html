@@ -132,11 +132,12 @@
               <div class="collapse mt-1" id="refExp">
                 <div class="row">
                   <div class="col-7">
-                    <div class="small-note fw-semibold">Table 3-1 — K<sub>z</sub> (z in ft)</div>
+                    <div class="small-note fw-semibold">Table 3-1 — K<sub>z</sub> (z in ft / m)</div>
                     <table class="table table-sm table-bordered table-peek bg-white">
-                      <thead><tr><th>z</th><th>B</th><th>C</th><th>D</th></tr></thead>
+                      <thead><tr><th>z (ft)</th><th>z (m)</th><th>B</th><th>C</th><th>D</th></tr></thead>
                       <tbody><tr v-for="(h,i) in tables.t31.heights" :key="h">
                         <td>[[ i===0?'0–15':h ]]</td>
+                        <td>[[ i===0?'0–4.57':(h*0.3048).toFixed(2) ]]</td>
                         <td :class="{'hl-row':f.exposure==='B'}">[[ tables.t31.rows[h].B ]]</td>
                         <td :class="{'hl-row':f.exposure==='C'}">[[ tables.t31.rows[h].C ]]</td>
                         <td :class="{'hl-row':f.exposure==='D'}">[[ tables.t31.rows[h].D ]]</td>
@@ -146,9 +147,9 @@
                   <div class="col-5">
                     <div class="small-note fw-semibold">Table 3-2 — power law</div>
                     <table class="table table-sm table-bordered table-peek bg-white">
-                      <thead><tr><th>Exp</th><th>α</th><th>z<sub>g</sub></th></tr></thead>
+                      <thead><tr><th>Exp</th><th>α</th><th>z<sub>g</sub> (ft)</th><th>z<sub>g</sub> (m)</th></tr></thead>
                       <tbody><tr v-for="(r,k) in tables.t32" :key="k" :class="{'hl-row':f.exposure===k}">
-                        <td>[[ k ]]</td><td>[[ r.alpha ]]</td><td>[[ r.zg ]]</td></tr></tbody>
+                        <td>[[ k ]]</td><td>[[ r.alpha ]]</td><td>[[ r.zg ]]</td><td>[[ (r.zg*0.3048).toFixed(1) ]]</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -230,7 +231,9 @@
             <div v-if="el.kind==='equipment_circular'" class="mb-2">
               <label class="form-label">Diameter D (mm)</label>
               <input type="number" class="form-control form-control-sm" v-model.number="el.D_mm">
-              <div class="form-text small-note ref-cap">b = D both directions; A = D·L</div>
+              <div class="form-text small-note ref-cap">Projected width <strong>b = D</strong> (the diameter), both directions;
+                projected frontal area A = D·L. The half-circumference (πD/2) is the developed surface, not the projected
+                width, and is not used in Eq. 3-1.</div>
             </div>
             <div v-else-if="el.kind==='equipment_rectangular'" class="row g-2 mb-2">
               <div class="col-6">
@@ -258,12 +261,47 @@
               <!-- Route A -->
               <div v-if="el.route==='A'">
                 <div class="row g-2">
-                  <div class="col-6"><label class="form-label">Face width (mm)</label>
+                  <div class="col-6"><label class="form-label">Face width b<sub>f</sub> (mm)</label>
                     <input type="number" class="form-control form-control-sm" v-model.number="el.face_width_mm"></div>
-                  <div class="col-6"><label class="form-label">Face height (mm)</label>
+                  <div class="col-6"><label class="form-label">Face height h<sub>f</sub> (mm)</label>
                     <input type="number" class="form-control form-control-sm" v-model.number="el.face_height_mm"></div>
-                  <div class="col-6"><label class="form-label">Solidity ratio Φ</label>
-                    <input type="number" step="0.01" class="form-control form-control-sm" v-model.number="el.phi"></div>
+                  <div class="col-12">
+                    <label class="form-label">Solidity ratio Φ
+                      <a class="ref-link text-decoration-none ms-1" data-bs-toggle="collapse" :href="'#refPhi'+ei">[how to compute]</a></label>
+                    <div class="collapse mb-1" :id="'refPhi'+ei">
+                      <div class="small-note alert alert-light border py-1 mb-0">
+                        Φ = (solid projected area of the members in one face) ÷ (gross outline area
+                        A<sub>g</sub> = b<sub>f</sub> × h<sub>f</sub>). Dimensionless (0–1).
+                        $$\Phi = \frac{\sum_i b_i\,L_i\,n_i}{A_g}$$
+                        where b = member width facing the wind, L = member length, n = count.
+                      </div>
+                    </div>
+                    <div class="btn-group btn-group-sm w-100 mb-1" role="group">
+                      <input type="radio" class="btn-check" :name="'phimode'+ei" :id="'phid'+ei" value="direct" v-model="el.phi_mode">
+                      <label class="btn btn-outline-secondary" :for="'phid'+ei">Enter Φ directly</label>
+                      <input type="radio" class="btn-check" :name="'phimode'+ei" :id="'phit'+ei" value="takeoff" v-model="el.phi_mode">
+                      <label class="btn btn-outline-secondary" :for="'phit'+ei">Compute from take-off</label>
+                    </div>
+                    <input v-if="el.phi_mode!=='takeoff'" type="number" step="0.01" class="form-control form-control-sm"
+                           v-model.number="el.phi" placeholder="Φ (0–1)">
+                    <div v-else>
+                      <table class="table table-sm align-middle mb-1">
+                        <thead class="small-note"><tr><th>b (mm)<br><span class="fw-normal">width facing wind</span></th><th>L (mm)<br><span class="fw-normal">member length</span></th><th>n</th><th></th></tr></thead>
+                        <tbody>
+                          <tr v-for="(m,mi) in el.phi_members" :key="mi">
+                            <td><input type="number" class="form-control form-control-sm" v-model.number="m.b_mm"></td>
+                            <td><input type="number" class="form-control form-control-sm" v-model.number="m.L_mm"></td>
+                            <td><input type="number" class="form-control form-control-sm" style="width:3.5rem" v-model.number="m.n"></td>
+                            <td><button class="btn btn-sm btn-outline-danger" @click="el.phi_members.splice(mi,1)" :disabled="el.phi_members.length===1">✕</button></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <button class="btn btn-sm btn-outline-secondary" @click="el.phi_members.push({b_mm:90,L_mm:2000,n:4})">+ member</button>
+                      <div class="small-note ref-cap mt-1" v-if="elResult(ei) && elResult(ei).extra && elResult(ei).extra.phi_mode==='takeoff'">
+                        A<sub>g</sub> = [[ elResult(ei).extra.Ag.toFixed(3) ]] m², Σ solid = [[ elResult(ei).extra.solid_area.toFixed(4) ]] m²
+                        → Φ = <strong>[[ elResult(ei).extra.phi.toFixed(3) ]]</strong></div>
+                    </div>
+                  </div>
                   <div class="col-6"><label class="form-label">Cross-section</label>
                     <select class="form-select form-select-sm" v-model="el.cross_section">
                       <option value="square">Square</option><option value="triangular">Triangular</option>
@@ -297,9 +335,10 @@
               <!-- Route B -->
               <div v-else>
                 <div class="small-note ref-cap mb-1">Member-by-member ignores the §3.1.5.7 shielding credit, so it over-predicts;
-                  use Route A for tall frames.</div>
+                  use Route A for tall frames. Per member: aspect ratio <strong>AR = L ÷ b</strong> (member length ÷ width facing
+                  wind) → correction c (Table 3-7) → C<sub>f</sub> = c · 1.6.</div>
                 <table class="table table-sm align-middle mb-1">
-                  <thead class="small-note"><tr><th>b (mm)</th><th>L (mm)</th><th>n</th><th>shape</th><th></th></tr></thead>
+                  <thead class="small-note"><tr><th>b (mm)<br><span class="fw-normal">width facing wind</span></th><th>L (mm)<br><span class="fw-normal">member length</span></th><th>n</th><th>shape</th><th></th></tr></thead>
                   <tbody>
                     <tr v-for="(m,mi) in el.members" :key="mi">
                       <td><input type="number" class="form-control form-control-sm" v-model.number="m.b_mm"></td>
@@ -346,23 +385,33 @@
                 <label class="form-label">K<sub>z</sub> height basis</label>
                 <select class="form-select form-select-sm" v-model="el.kz_basis">
                   <option value="tip">Tip / top of element</option>
-                  <option value="centroid">Centroid</option>
+                  <option value="centroid">Centroid (mid-height)</option>
                   <option value="custom">Custom height…</option>
                 </select>
                 <input v-if="el.kz_basis==='custom'" type="number" class="form-control form-control-sm mt-1"
                        placeholder="K_z height (mm)" v-model.number="el.kz_height_mm">
                 <div class="form-text small-note ref-cap" v-if="elResult(ei)">K<sub>z</sub> = <strong>[[ elResult(ei).Kz.toFixed(4) ]]</strong>
-                  @ [[ elResult(ei).h_ft.toFixed(1) ]] ft
+                  @ [[ elResult(ei).h_ft.toFixed(1) ]] ft ([[ (elResult(ei).h_ft*0.3048).toFixed(2) ]] m)
                   <a class="ref-link text-decoration-none" data-bs-toggle="collapse" :href="'#refKz'+ei">[Table 3-1]</a></div>
                 <div class="collapse mt-1" :id="'refKz'+ei">
+                  <div class="small-note alert alert-light border py-1 mb-1">
+                    <strong>When to use each basis</strong> (effective height z, §3.1.5.2.2 — the height at which the wind is evaluated):
+                    <ul class="mb-0 ps-3">
+                      <li><strong>Tip / top</strong> (z = z<sub>top</sub>): most conservative; the single highest K<sub>z</sub> over the element. Matches the project PI/CT/CB sheets — default.</li>
+                      <li><strong>Centroid</strong> (z = z<sub>base</sub> + L/2): K<sub>z</sub> at the element's mid-height; appropriate when the wind resultant acts at the centroid of a uniform projected area.</li>
+                      <li><strong>Custom</strong>: evaluate at a stated reference height (e.g. a base plinth taken at the governing equipment height).</li>
+                    </ul>
+                  </div>
                   <table class="table table-sm table-bordered table-peek bg-white mb-0">
-                    <thead><tr><th>z(ft)</th><th>B</th><th>C</th><th>D</th></tr></thead>
+                    <thead><tr><th>z (ft)</th><th>z (m)</th><th>B</th><th>C</th><th>D</th></tr></thead>
                     <tbody><tr v-for="(h,i) in tables.t31.heights" :key="h"
                        :class="{'hl-row': elResult(ei) && (elResult(ei).kz_info.h_lo==h || elResult(ei).kz_info.h_hi==h)}">
-                      <td>[[ i===0?'0–15':h ]]</td><td>[[ tables.t31.rows[h].B ]]</td>
+                      <td>[[ i===0?'0–15':h ]]</td><td>[[ i===0?'0–4.57':(h*0.3048).toFixed(2) ]]</td>
+                      <td>[[ tables.t31.rows[h].B ]]</td>
                       <td>[[ tables.t31.rows[h].C ]]</td><td>[[ tables.t31.rows[h].D ]]</td></tr></tbody>
                   </table>
-                  <div class="small-note">$$K_z = K_{z,lo}+\frac{h-h_{lo}}{h_{hi}-h_{lo}}(K_{z,hi}-K_{z,lo})$$</div>
+                  <div class="small-note">Linear interpolation (h in ft): $$K_z = K_{z,lo}+\frac{h-h_{lo}}{h_{hi}-h_{lo}}(K_{z,hi}-K_{z,lo})$$
+                    For h ≤ 15 ft use the 0–15 row; for h &gt; 100 ft use Eq. 3-2 directly.</div>
                 </div>
               </div>
               <div class="col-6">
@@ -375,10 +424,14 @@
                 <div class="form-text small-note ref-cap" v-if="elResult(ei)">GRF = <strong>[[ elResult(ei).GRF.toFixed(3) ]]</strong>
                   <a v-if="el.grf_type!=='rigid'" class="ref-link text-decoration-none" data-bs-toggle="collapse" :href="'#refGrf'+ei">[table]</a></div>
                 <div class="collapse mt-1" :id="'refGrf'+ei" v-if="el.grf_type!=='rigid'">
+                  <div class="small-note ref-cap mb-1">Banded step lookup (no interpolation): the row is chosen by
+                    <em>lower &lt; height ≤ upper</em>. Column = selected exposure.</div>
                   <table class="table table-sm table-bordered table-peek bg-white mb-0">
-                    <thead><tr><th>≤ft</th><th>B</th><th>C</th><th>D</th></tr></thead>
-                    <tbody><tr v-for="(r,i) in (el.grf_type==='wire'?tables.t34a:tables.t34b)" :key="i">
-                      <td>[[ r.upper ]]</td>
+                    <thead><tr><th>Height band (ft)</th><th>(m)</th><th>B</th><th>C</th><th>D</th></tr></thead>
+                    <tbody><tr v-for="(r,i) in (el.grf_type==='wire'?tables.t34a:tables.t34b)" :key="i"
+                       :class="{'hl-row': elResult(ei) && elResult(ei).grf_info.band_upper===r.upper}">
+                      <td>[[ band34ft(el.grf_type==='wire'?tables.t34a:tables.t34b, i) ]]</td>
+                      <td>[[ band34m(el.grf_type==='wire'?tables.t34a:tables.t34b, i) ]]</td>
                       <td :class="{'hl-row':f.exposure==='B'}">[[ r.B ]]</td>
                       <td :class="{'hl-row':f.exposure==='C'}">[[ r.C ]]</td>
                       <td :class="{'hl-row':f.exposure==='D'}">[[ r.D ]]</td></tr></tbody>

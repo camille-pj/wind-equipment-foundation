@@ -102,6 +102,26 @@ def test_075_toggle():
                         0.75 * base["summary"]["FR_kN"], rel_tol=1e-9)
 
 
+def test_solidity_takeoff_matches_direct():
+    """Φ computed from a member take-off must equal the direct-Φ result when the
+    take-off solid area divided by Ag gives the same Φ."""
+    # Ag = 0.5 x 2.0 = 1.0 m^2; take-off solid = 0.1*2.0*1 = 0.2 m^2 -> Φ = 0.20
+    takeoff = {
+        **PRESETS["PI_STACK"],
+        "elements": [
+            PRESETS["PI_STACK"]["elements"][0],
+            {**PRESETS["PI_STACK"]["elements"][1],
+             "phi_mode": "takeoff",
+             "phi_members": [{"b_mm": 100, "L_mm": 2000, "n": 1}]},
+        ],
+    }
+    direct = calculate(PRESETS["PI_STACK"])["elements"][1]
+    to = calculate(takeoff)["elements"][1]
+    assert abs(to["extra"]["phi"] - 0.20) < 1e-9
+    assert abs(to["extra"]["solid_area"] - 0.20) < 1e-9
+    assert math.isclose(to["Fx"], direct["Fx"], rel_tol=1e-9)
+
+
 def test_centroid_basis_lowers_kz():
     """Centroid basis evaluates Kz lower in the profile -> Kz <= tip basis."""
     tip = calculate(PRESETS["PI"])["elements"][0]["Kz"]
